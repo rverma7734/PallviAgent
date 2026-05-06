@@ -1,28 +1,48 @@
-"""
-Intake Processor
-Deterministic question flow + lightweight field extraction.
-"""
-import re
+"""Deterministic emergency intake flow and priority classification."""
 
 REQUIRED_FIELDS = [
+    'consent',
     'full_name',
-    'country_of_origin',
-    'immigration_status',
-    'help_type',
-    'entry_date',
-    'court_date',
-    'email',
+    'callback_phone',
+    'person_at_risk',
+    'location',
+    'urgency',
+    'a_number',
+    'language',
+    'details',
 ]
 
 FIELD_QUESTIONS = {
-    'full_name': 'Thank you. What is your full name?',
-    'country_of_origin': 'Thank you. What is your country of origin?',
-    'immigration_status': 'Thank you. What is your current immigration status?',
-    'help_type': 'Thank you. What kind of immigration help are you seeking?',
-    'entry_date': 'Thank you. When did you enter the United States?',
-    'court_date': 'Thank you. Do you have a court date?',
-    'email': 'Thank you. What is your email address?',
+    'consent': 'Reply YES to continue by text, or STOP to opt out.',
+    'full_name': 'What is your full name?',
+    'callback_phone': 'What phone number should staff call back?',
+    'person_at_risk': 'Who needs help? Reply SELF, FAMILY, FRIEND, CLIENT, or OTHER.',
+    'location': 'What city and state is the person in right now?',
+    'urgency': 'What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/deadline within 72 hours, 4 general immigration help.',
+    'a_number': 'If you have an A-number, send it now. If not, reply NONE.',
+    'language': 'What language should staff use when calling?',
+    'details': 'Briefly describe what happened. Do not send documents by text unless staff asks.',
 }
+
+PRIORITY_P0_TERMS = [
+    'ice is here',
+    'at the door',
+    'detained',
+    'custody',
+    'taken',
+    'arrested',
+    'separated',
+]
+
+PRIORITY_P1_TERMS = [
+    'tomorrow',
+    '72 hours',
+    'hearing',
+    'court',
+    'deadline',
+    'removal',
+    'deportation',
+]
 
 
 class AIProcessor:
@@ -50,64 +70,41 @@ class AIProcessor:
 
     def _extract_fields(self, messages, current):
         extracted = dict(current)
-        recent_client_messages = [
+        client_messages = [
             m.get('content', '').strip()
             for m in messages
             if m.get('role') == 'client' and m.get('content')
         ]
-        full_text = ' '.join(recent_client_messages)
-        lower_text = full_text.lower()
+        if not client_messages:
+            return extracted
 
-        email_match = re.search(r'[\w.\-+]+@[\w.\-]+\.[A-Za-z]{2,}', full_text)
-        if email_match:
-            extracted['email'] = email_match.group(0)
+        latest_answer = client_messages[-1].strip()
+        missing = self._missing_fields(extracted)
+        next_field = missing[0] if missing else None
+        if not next_field:
+            return extracted
 
-        if not extracted.get('full_name'):
-            for message in recent_client_messages[:3]:
-                candidate = message.strip()
-                if re.fullmatch(r"[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?\s+[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?", candidate):
-                    extracted['full_name'] = candidate
-                    break
+        if next_field == 'consent':
+            if latest_answer.lower() in {'yes', 'y', 'start'}:
+                extracted['consent'] = 'yes'
+            return extracted
 
-        for country in ['guatemala', 'mexico', 'el salvador', 'honduras', 'china', 'india', 'haiti']:
-            if country in lower_text:
-                extracted['country_of_origin'] = country.title()
-                break
+        extracted[next_field] = latest_answer
 
-        if 'overstay' in lower_text or 'overstayed' in lower_text:
-            extracted['immigration_status'] = 'Overstayed visa'
-        elif 'asylum' in lower_text:
-            extracted['immigration_status'] = 'Seeking asylum'
-        elif 'visa' in lower_text:
-            extracted['immigration_status'] = 'Visa holder'
-
-        if 'asylum' in lower_text:
-            extracted['help_type'] = 'Asylum'
-        elif 'green card' in lower_text:
-            extracted['help_type'] = 'Green card'
-        elif 'work permit' in lower_text:
-            extracted['help_type'] = 'Work permit'
-        elif 'visa' in lower_text:
-            extracted['help_type'] = 'Visa'
-        elif 'court' in lower_text:
-            extracted['help_type'] = 'Defense'
-
-        month_year_pattern = re.compile(
-            r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}',
-            re.IGNORECASE,
-        )
-        for message in recent_client_messages:
-            date_match = month_year_pattern.search(message)
-            if not date_match:
-                continue
-            date_value = date_match.group(0).title()
-            lowered = message.lower()
-            if 'court' in lowered:
-                extracted['court_date'] = date_value
-            elif not extracted.get('entry_date'):
-                extracted['entry_date'] = date_value
-
-        if 'no court' in lower_text or 'no upcoming court' in lower_text or 'none' in lower_text:
-            extracted['court_date'] = 'None'
+        if not self._missing_fields(extracted):
+            extracted['priority'] = self._classify_priority(extracted)
 
         return extracted
+
+    def _classify_priority(self, fields):
+        urgency = str(fields.get('urgency', '')).lower()
+        details = str(fields.get('details', '')).lower()
+        combined = f"{urgency} {details}"
+
+        if urgency.startswith('1') or urgency.startswith('2'):
+            return 'P0'
+        if any(term in combined for term in PRIORITY_P0_TERMS):
+            return 'P0'
+        if urgency.startswith('3') or any(term in combined for term in PRIORITY_P1_TERMS):
+            return 'P1'
+        return 'P2'

@@ -22,23 +22,25 @@ def simulate_conversation():
     })
     print(f"Reset: {clear_response.json()['response']}\n")
 
-    print("Client: Hi, I need help with immigration")
+    print("Client: ICE detained my husband tonight")
     response = requests.post(f"{BASE_URL}/simulate", json={
         "sender": sender,
-        "message": "Hi, I need help with immigration"
+        "message": "ICE detained my husband tonight"
     })
 
     data = response.json()
     print(f"Agent: {data['response']}\n")
 
     conversation = [
-        "Carlos Ramirez",
-        "Guatemala",
-        "I overstayed my tourist visa about 2 years ago",
-        "I'm seeking asylum, I was threatened by gang violence",
-        "May 2022",
-        "I have no court date",
-        "carlos.ramirez@email.com",
+        "YES",
+        "Maria Lopez",
+        "+1 555 555 0123",
+        "FAMILY",
+        "Newark NJ",
+        "2 detained now",
+        "NONE",
+        "Spanish",
+        "ICE detained my husband tonight after a traffic stop.",
     ]
 
     for answer in conversation:
