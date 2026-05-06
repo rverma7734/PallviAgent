@@ -1,7 +1,4 @@
-"""
-Attorney Notification Module
-Sends intake summary to attorney via SMS and email
-"""
+"""Staff notification module for completed intakes."""
 import os
 from twilio.rest import Client
 
@@ -9,19 +6,18 @@ from twilio.rest import Client
 from dotenv import load_dotenv
 load_dotenv()
 
-ATTORNEY_PHONE = os.getenv('ATTORNEY_PHONE', '')
-ATTORNEY_EMAIL = os.getenv('ATTORNEY_EMAIL', '')
+STAFF_ALERT_PHONE = os.getenv('STAFF_ALERT_PHONE') or os.getenv('ATTORNEY_PHONE', '')
+STAFF_ALERT_EMAIL = os.getenv('STAFF_ALERT_EMAIL') or os.getenv('ATTORNEY_EMAIL', '')
 
 
 class Notify:
-    """Sends notifications to attorney"""
+    """Sends staff notifications."""
     
     def __init__(self):
         self.twilio_sid = os.getenv('TWILIO_ACCOUNT_SID')
         self.twilio_token = os.getenv('TWILIO_AUTH_TOKEN')
         self.twilio_phone = os.getenv('TWILIO_PHONE_NUMBER')
         
-        # Initialize Twilio client if configured
         if self.twilio_sid and self.twilio_token and self.twilio_sid != 'placeholder':
             self.client = Client(self.twilio_sid, self.twilio_token)
         else:
@@ -30,24 +26,22 @@ class Notify:
     def send_notification(self, summary: str):
         """Send notification to attorney"""
         
-        # Try to send SMS via Twilio
-        if self.client and self.twilio_phone:
+        if self.client and self.twilio_phone and STAFF_ALERT_PHONE:
             try:
                 message = self.client.messages.create(
-                    body="📋 New Immigration Intake Received\n\nCheck email for details.",
+                    body=self._sms_alert_body(summary),
                     from_=self.twilio_phone,
-                    to=ATTORNEY_PHONE
+                    to=STAFF_ALERT_PHONE
                 )
-                print(f"✅ SMS sent: {message.sid}")
+                print(f"Staff alert SMS sent: {message.sid}")
             except Exception as e:
-                print(f"❌ SMS failed: {e}")
+                print(f"Staff alert SMS failed: {e}")
         
-        # Print summary to console
         print("\n" + "="*50)
-        print("📧 EMAIL REPORT (Simulated)")
+        print("EMAIL REPORT (Simulated)")
         print("="*50)
-        print(f"To: {ATTORNEY_EMAIL}")
-        print("Subject: New Immigration Intake - Action Required")
+        print(f"To: {STAFF_ALERT_EMAIL}")
+        print("Subject: New Immigration Emergency Intake - Action Required")
         print("-"*50)
         print(summary)
         print("="*50 + "\n")
@@ -61,8 +55,16 @@ class Notify:
                     from_=self.twilio_phone,
                     to=to
                 )
-                print(f"✅ SMS sent: {msg.sid}")
+                print(f"SMS sent: {msg.sid}")
             except Exception as e:
-                print(f"❌ SMS failed: {e}")
+                print(f"SMS failed: {e}")
         else:
             print(f"\n[SMS to {to}]: {message}\n")
+
+    def _sms_alert_body(self, summary: str):
+        lines = [line.strip() for line in summary.splitlines() if line.strip()]
+        priority = next((line for line in lines if 'NEW IMMIGRATION EMERGENCY INTAKE' in line), 'New immigration emergency intake')
+        location = next((line for line in lines if line.startswith('Current Location:')), '')
+        language = next((line for line in lines if line.startswith('Language:')), '')
+        body = '\n'.join([priority, location, language, 'Open the intake dashboard or server logs for details.'])
+        return body[:1500]

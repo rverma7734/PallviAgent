@@ -2,7 +2,11 @@
 Immigration Intake Agent - Server
 Receives SMS webhooks and orchestrates the intake conversation
 """
-from flask import Flask, request, jsonify
+import os
+
+from flask import Flask, request, jsonify, send_from_directory
+from twilio.request_validator import RequestValidator
+from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
 from conversation_manager import ConversationManager
 from ai_processor import AIProcessor
@@ -18,11 +22,36 @@ ai_processor = AIProcessor()
 summary_formatter = SummaryFormatter()
 notifier = Notify()
 
-DISCLAIMER = """Thank you for contacting our immigration law office. I can collect some information for the attorney to review your situation. This conversation does not create an attorney-client relationship and no legal advice will be provided here.
+VALIDATE_TWILIO_SIGNATURE = os.getenv('VALIDATE_TWILIO_SIGNATURE', '').lower() == 'true'
+PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', '').rstrip('/')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
 
-What is your full name?"""
+DISCLAIMER = """You have reached our emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.
 
-COMPLETE_RESPONSE = "Thank you for providing your information. An attorney will review your matter and contact you shortly. This concludes our intake process."
+Reply YES to continue by text, or STOP to opt out."""
+
+COMPLETE_RESPONSE = "Thank you. We sent this intake to the on-call team. Please keep your phone available for a callback. If there is immediate physical danger, call 911."
+
+HELP_RESPONSE = "This line collects immigration intake information for staff callback. Reply STOP to opt out. If someone is in immediate physical danger, call 911."
+
+STOP_RESPONSE = "You have opted out and will not receive further texts from this intake line."
+
+
+def _twilio_validation_url():
+    if not PUBLIC_BASE_URL:
+        return request.url
+    return f"{PUBLIC_BASE_URL}{request.full_path}".rstrip('?')
+
+
+def _is_valid_twilio_request():
+    if not VALIDATE_TWILIO_SIGNATURE:
+        return True
+    if not TWILIO_AUTH_TOKEN:
+        print("Twilio signature validation enabled but TWILIO_AUTH_TOKEN is missing")
+        return False
+    signature = request.headers.get('X-Twilio-Signature', '')
+    validator = RequestValidator(TWILIO_AUTH_TOKEN)
+    return validator.validate(_twilio_validation_url(), request.form, signature)
 
 
 def _log_intake_debug(sender: str, debug: dict):
@@ -54,6 +83,24 @@ def _log_summary_debug(sender: str, debug: dict):
 
 
 def process_incoming_message(sender: str, message: str, notify_attorney: bool = True) -> dict:
+    normalized_message = message.strip()
+    if normalized_message.upper() in {'STOP', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'}:
+        conversation_manager.clear_conversation(sender)
+        return {
+            'response': STOP_RESPONSE,
+            'fields': {},
+            'intake_complete': False,
+            'debug': {'path': 'stop'}
+        }
+
+    if normalized_message.upper() in {'HELP', 'INFO'}:
+        return {
+            'response': HELP_RESPONSE,
+            'fields': {},
+            'intake_complete': False,
+            'debug': {'path': 'help'}
+        }
+
     conversation = conversation_manager.get_or_create(sender)
     is_new_conversation = len(conversation['messages']) == 0
 
@@ -119,6 +166,9 @@ def process_incoming_message(sender: str, message: str, notify_attorney: bool = 
 
 @app.route('/sms', methods=['POST'])
 def handle_sms():
+    if not _is_valid_twilio_request():
+        return 'invalid signature', 403
+
     sender = request.form.get('From', '')
     message = request.form.get('Body', '').strip()
 
@@ -127,7 +177,19 @@ def handle_sms():
 
     print(f"Incoming from {sender}: {message}")
     result = process_incoming_message(sender, message, notify_attorney=True)
-    return result['response'], 200
+    twiml = MessagingResponse()
+    twiml.message(result['response'])
+    return str(twiml), 200, {'Content-Type': 'application/xml'}
+
+
+@app.route('/privacy-policy.html', methods=['GET'])
+def privacy_policy():
+    return send_from_directory(app.root_path, 'privacy-policy.html')
+
+
+@app.route('/terms.html', methods=['GET'])
+def terms():
+    return send_from_directory(app.root_path, 'terms.html')
 
 
 @app.route('/health', methods=['GET'])
