@@ -1,0 +1,8 @@
+name = "pallvi-agent"
+main = "worker/src/index.js"
+compatibility_date = "2026-05-06"
+
+[vars]
+INTAKE_ORG_NAME = "PallviAgent"
+VALIDATE_TWILIO_SIGNATURE = "true"
+GEMINI_MODEL = "gemini-2.0-flash"

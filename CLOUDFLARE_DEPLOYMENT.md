@@ -17,13 +17,13 @@ The `worker/` directory contains a Cloudflare Worker version of the intake syste
 
 1. In Cloudflare, create a Workers KV namespace named `PALLVI_INTAKES`.
 2. Copy its namespace ID.
-3. In `worker/wrangler.toml`, replace:
+3. In Cloudflare, bind the namespace to the Worker with this binding name:
 
 ```text
-REPLACE_WITH_CLOUDFLARE_KV_NAMESPACE_ID
+INTAKE_KV
 ```
 
-with the namespace ID.
+The root `wrangler.toml` is intentionally used for Cloudflare's GitHub deployment flow. The `worker/wrangler.toml` file is kept for local Worker-only development.
 
 ## Secrets And Variables
 
