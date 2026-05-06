@@ -77,3 +77,7 @@ PUBLIC_BASE_URL=https://YOUR-DOMAIN
 ```
 
 This enables Twilio request signature validation for `/sms`.
+
+## Deployment
+
+See `DEPLOYMENT.md` for Render deployment and Twilio webhook setup.
