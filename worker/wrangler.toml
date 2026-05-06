@@ -1,12 +1,13 @@
 name = "pallvi-agent"
-main = "src/index.js"
+main = "src/index.mjs"
 compatibility_date = "2026-05-06"
 
 [[kv_namespaces]]
 binding = "INTAKE_KV"
-id = "REPLACE_WITH_CLOUDFLARE_KV_NAMESPACE_ID"
+id = "65b5756f72064b4786698cf00670fa7a"
 
 [vars]
 INTAKE_ORG_NAME = "PallviAgent"
+PUBLIC_BASE_URL = "https://pallvi-agent.rohitverma7734.workers.dev"
 VALIDATE_TWILIO_SIGNATURE = "true"
 GEMINI_MODEL = "gemini-2.0-flash"

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleRequest, processIncomingSms } from "../src/index.js";
+import { handleRequest, processIncomingSms } from "../src/index.mjs";
 
 function env() {
   const store = new Map();

@@ -25,6 +25,12 @@ INTAKE_KV
 
 The root `wrangler.toml` is intentionally used for Cloudflare's GitHub deployment flow. The `worker/wrangler.toml` file is kept for local Worker-only development.
 
+Current KV namespace ID:
+
+```text
+65b5756f72064b4786698cf00670fa7a
+```
+
 ## Secrets And Variables
 
 Set these in the Cloudflare Worker dashboard.
@@ -33,7 +39,7 @@ Variables:
 
 ```text
 INTAKE_ORG_NAME=PallviAgent
-PUBLIC_BASE_URL=https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev
+PUBLIC_BASE_URL=https://pallvi-agent.rohitverma7734.workers.dev
 VALIDATE_TWILIO_SIGNATURE=true
 GEMINI_MODEL=gemini-2.0-flash
 ```
@@ -64,7 +70,7 @@ Deploy command: npx wrangler deploy
 If Cloudflare asks for the Worker entrypoint:
 
 ```text
-worker/src/index.js
+worker/src/index.mjs
 ```
 
 ## Local Test
@@ -80,7 +86,7 @@ npm test
 After Cloudflare deploys, set the Twilio incoming SMS webhook to:
 
 ```text
-https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev/sms
+https://pallvi-agent.rohitverma7734.workers.dev/sms
 ```
 
 Method: `POST`.
@@ -88,9 +94,9 @@ Method: `POST`.
 ## Smoke Tests
 
 ```bash
-curl https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev/health
-curl -I https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev/privacy-policy.html
-curl -I https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev/terms.html
+curl https://pallvi-agent.rohitverma7734.workers.dev/health
+curl -I https://pallvi-agent.rohitverma7734.workers.dev/privacy-policy.html
+curl -I https://pallvi-agent.rohitverma7734.workers.dev/terms.html
 ```
 
 The existing GitHub Pages URLs remain valid for A2P registration:
