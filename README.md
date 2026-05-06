@@ -81,3 +81,5 @@ This enables Twilio request signature validation for `/sms`.
 ## Deployment
 
 See `DEPLOYMENT.md` for Render deployment and Twilio webhook setup.
+
+For the lower-cost Cloudflare Workers deployment path, see `CLOUDFLARE_DEPLOYMENT.md`.
