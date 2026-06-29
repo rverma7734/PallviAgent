@@ -6,7 +6,7 @@ PallviAgent is an inbound-first SMS intake assistant for immigration emergency c
 
 ## Suggested opt-in description
 
-Users opt in by contacting the organization through its website, phone line, referral materials, or emergency intake page where the SMS number is listed with disclosure language. The disclosure states that texting the number or submitting the intake form authorizes SMS messages about the intake or emergency callback request, that message and data rates may apply, that message frequency varies, and that users may reply STOP to opt out or HELP for help. When a user first texts the intake number, the system sends a consent/disclaimer message and asks the user to reply YES before continuing with intake questions.
+End users opt in through the publicly accessible page at https://rverma7734.github.io/PallviAgent/sms-opt-in.html. The page displays the PallviAgent program name, the SMS number +1 (516) 871-4383, and instructions to text START. It discloses that messages concern immigration intake and emergency callback coordination, message frequency varies, message and data rates may apply, consent is not a condition of purchase, and users may reply STOP to opt out or HELP for help. It links directly to the Privacy Policy and SMS Terms. After the user texts START, PallviAgent identifies itself, states that automated SMS is not legal advice and does not create an attorney-client relationship, and asks the user to reply YES. The user must reply YES before any intake questions are sent. This public webpage-to-keyword flow is the only opt-in method used for this campaign.
 
 ## Required keywords
 
@@ -19,3 +19,4 @@ Once GitHub Pages is live, use:
 
 - Privacy Policy: `https://rverma7734.github.io/PallviAgent/privacy-policy.html`
 - Terms of Service: `https://rverma7734.github.io/PallviAgent/terms.html`
+- SMS Opt-In: `https://rverma7734.github.io/PallviAgent/sms-opt-in.html`

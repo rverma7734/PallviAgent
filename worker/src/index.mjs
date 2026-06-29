@@ -41,6 +41,10 @@ export async function handleRequest(request, env) {
     return html(TERMS_HTML);
   }
 
+  if (request.method === "GET" && url.pathname === "/sms-opt-in.html") {
+    return html(SMS_OPT_IN_HTML);
+  }
+
   if (request.method === "POST" && url.pathname === "/sms") {
     if (!(await isValidTwilioRequest(request, env))) {
       return new Response("invalid signature", { status: 403 });
@@ -286,17 +290,17 @@ const PRIVACY_POLICY_HTML = `<!doctype html>
 <body>
 <main style="font-family:Arial,Helvetica,sans-serif;line-height:1.55;max-width:760px;margin:32px auto;padding:0 20px;color:#1f2933">
 <h1>Privacy Policy</h1>
-<p>Last updated: May 6, 2026</p>
+<p>Last updated: June 29, 2026</p>
 <p>PallviAgent respects your privacy. This Privacy Policy explains how information is collected, used, and protected when you contact the emergency immigration intake line by SMS or related intake channels.</p>
 <h2>Information Collected</h2>
 <p>The intake line may collect information you choose to provide, including your name, phone number, callback phone number, preferred language, location, A-number if provided, basic immigration emergency details, message contents, and message timestamps.</p>
 <h2>SMS Information</h2>
 <p>If you contact the intake line by SMS, the system may collect your phone number, message contents, timestamps, language preference, and basic intake information you provide. This information is used to respond to your request, route it to appropriate staff, maintain records, and support operational obligations.</p>
-<p>SMS opt-in data and consent are not sold, rented, or shared with third parties for their marketing purposes. Personal information collected through SMS is not sold.</p>
+<p>Mobile information will not be shared with third parties or affiliates for marketing or promotional purposes. Text messaging originator opt-in data and consent will not be shared with any third parties. Personal information collected through SMS is not sold or rented.</p>
 <h2>SMS Consent</h2>
-<p>By texting the intake number or submitting a form that includes SMS disclosure language, you agree to receive SMS messages related to your intake, callback, appointment, or service request. Message and data rates may apply. Message frequency varies. You may reply STOP to opt out or HELP for help.</p>
+<p>Users opt in by reviewing the public <a href="sms-opt-in.html">SMS opt-in page</a>, texting START to +1 (516) 871-4383, and replying YES to the consent prompt. Messages relate only to the user's intake, callback, appointment, or service request. Message and data rates may apply. Message frequency varies. Reply <strong>STOP</strong> to opt out or <strong>HELP</strong> for help.</p>
 <h2>Contact</h2>
-<p>For questions about this Privacy Policy, contact the organization operating this intake line.</p>
+<p>For SMS assistance, reply HELP to +1 (516) 871-4383.</p>
 </main>
 </body>
 </html>`;
@@ -307,16 +311,38 @@ const TERMS_HTML = `<!doctype html>
 <body>
 <main style="font-family:Arial,Helvetica,sans-serif;line-height:1.55;max-width:760px;margin:32px auto;padding:0 20px;color:#1f2933">
 <h1>SMS Terms and Conditions</h1>
-<p>Last updated: May 6, 2026</p>
+<p>Last updated: June 29, 2026</p>
 <p>PallviAgent uses SMS for immigration intake coordination, emergency callback routing, appointment coordination, and related client-service communications.</p>
 <h2>Program Description</h2>
-<p>When you text the intake number or opt in through a form, the system may send SMS messages related to your immigration intake or emergency callback request. Messages may include consent prompts, intake questions, callback status updates, appointment coordination, HELP responses, and STOP confirmations.</p>
+<p>Users opt in by reviewing the public <a href="sms-opt-in.html">SMS opt-in page</a>, texting <strong>START</strong> to +1 (516) 871-4383, and replying <strong>YES</strong> to the consent prompt. The system may then send messages related to the user's immigration intake or emergency callback request.</p>
 <h2>No Legal Advice By SMS</h2>
 <p>Automated SMS messages do not provide legal advice and do not create an attorney-client relationship. Staff review is required before any legal advice or representation decision is made.</p>
 <h2>Message Frequency</h2>
-<p>Message frequency varies. Message and data rates may apply. Reply STOP to opt out. Reply HELP for help.</p>
+<p>Message frequency varies. Message and data rates may apply. Reply <strong>STOP</strong> to opt out. Reply <strong>HELP</strong> for help or text HELP to +1 (516) 871-4383.</p>
 <h2>Emergency Notice</h2>
 <p>SMS is not monitored continuously and should not be used for immediate physical danger. If someone is in immediate physical danger, call 911.</p>
+<h2>Privacy</h2>
+<p>Review the <a href="privacy-policy.html">Privacy Policy</a>.</p>
+</main>
+</body>
+</html>`;
+
+const SMS_OPT_IN_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PallviAgent SMS Emergency Intake Opt-In</title></head>
+<body>
+<main style="font-family:Arial,Helvetica,sans-serif;line-height:1.55;max-width:760px;margin:32px auto;padding:0 20px;color:#17202a">
+<p style="color:#9f2d20;font-weight:700;text-transform:uppercase">PallviAgent</p>
+<h1>Emergency immigration intake by SMS</h1>
+<p>Use this line to provide basic information for a staff callback. Automated messages do not provide legal advice or create an attorney-client relationship.</p>
+<h2>How to opt in</h2>
+<ol><li>Review the disclosures on this page.</li><li>Text <strong>START</strong> to <strong>+1 (516) 871-4383</strong>.</li><li>Reply <strong>YES</strong> to the PallviAgent consent prompt before intake questions begin.</li></ol>
+<h2>SMS disclosures</h2>
+<p>By texting START and then replying YES, you agree to receive conversational SMS messages from PallviAgent about your immigration intake or emergency callback request.</p>
+<ul><li>Message frequency varies during an active intake.</li><li>Message and data rates may apply.</li><li>Reply <strong>STOP</strong> to opt out.</li><li>Reply <strong>HELP</strong> for help.</li><li>Consent is not a condition of purchasing goods or services.</li></ul>
+<h2>Important safety notice</h2>
+<p>This line is not monitored continuously. If someone is in immediate physical danger, call 911. Do not send documents or highly sensitive information unless staff specifically asks.</p>
+<p><a href="privacy-policy.html">Privacy Policy</a> | <a href="terms.html">SMS Terms and Conditions</a></p>
 </main>
 </body>
 </html>`;

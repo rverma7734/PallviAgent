@@ -75,3 +75,16 @@ test("sms endpoint returns TwiML", async () => {
   assert.equal(response.headers.get("Content-Type"), "application/xml; charset=utf-8");
   assert.match(body, /<Response><Message>/);
 });
+
+test("public SMS opt-in page includes required disclosures", async () => {
+  const response = await handleRequest(new Request("https://example.com/sms-opt-in.html"), env());
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(body, /\+1 \(516\) 871-4383/);
+  assert.match(body, /Message and data rates may apply/);
+  assert.match(body, /Reply <strong>STOP<\/strong>/);
+  assert.match(body, /Reply <strong>HELP<\/strong>/);
+  assert.match(body, /privacy-policy\.html/);
+  assert.match(body, /terms\.html/);
+});
