@@ -5,6 +5,7 @@ import server
 
 class IntakeFlowTest(unittest.TestCase):
     def setUp(self):
+        server.app.config['TESTING'] = True
         self.client = server.app.test_client()
         self.sender = "test_flow_client"
         self.client.post("/simulate", json={"sender": self.sender, "message": "CLEAR"})
@@ -26,7 +27,6 @@ class IntakeFlowTest(unittest.TestCase):
             "FAMILY",
             "Newark NJ",
             "2 detained now",
-            "NONE",
             "Spanish",
             "ICE detained my husband tonight after a traffic stop.",
         ]
@@ -55,6 +55,10 @@ class IntakeFlowTest(unittest.TestCase):
         self.assertIn("application/xml", response.headers["Content-Type"])
         self.assertIn("<Response>", response.text)
         self.assertIn("<Message>", response.text)
+
+    def test_conversation_routes_are_not_public(self):
+        response = self.client.get("/conversations")
+        self.assertEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":

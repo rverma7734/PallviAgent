@@ -8,6 +8,7 @@ load_dotenv()
 
 STAFF_ALERT_PHONE = os.getenv('STAFF_ALERT_PHONE') or os.getenv('ATTORNEY_PHONE', '')
 STAFF_ALERT_EMAIL = os.getenv('STAFF_ALERT_EMAIL') or os.getenv('ATTORNEY_EMAIL', '')
+ENABLE_DEBUG_OUTPUT = os.getenv('ENABLE_DEBUG_OUTPUT', '').lower() == 'true'
 
 
 class Notify:
@@ -37,14 +38,8 @@ class Notify:
             except Exception as e:
                 print(f"Staff alert SMS failed: {e}")
         
-        print("\n" + "="*50)
-        print("EMAIL REPORT (Simulated)")
-        print("="*50)
-        print(f"To: {STAFF_ALERT_EMAIL}")
-        print("Subject: New Immigration Emergency Intake - Action Required")
-        print("-"*50)
-        print(summary)
-        print("="*50 + "\n")
+        if ENABLE_DEBUG_OUTPUT:
+            print("Staff email alert is not implemented; debug summary omitted from production logs")
     
     def send_sms(self, to: str, message: str):
         """Send SMS"""
@@ -59,7 +54,8 @@ class Notify:
             except Exception as e:
                 print(f"SMS failed: {e}")
         else:
-            print(f"\n[SMS to {to}]: {message}\n")
+            if ENABLE_DEBUG_OUTPUT:
+                print("SMS client is not configured; message body omitted")
 
     def _sms_alert_body(self, summary: str):
         lines = [line.strip() for line in summary.splitlines() if line.strip()]

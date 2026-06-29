@@ -4,25 +4,38 @@ const STEPS = [
     prompt: (env) =>
       `You have reached ${env.INTAKE_ORG_NAME || "our"} emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.\n\nReply YES to continue by text, or STOP to opt out.`
   },
-  { key: "fullName", prompt: () => "What is your full name?" },
-  { key: "callbackPhone", prompt: () => "What phone number should staff call back?" },
-  { key: "personAtRisk", prompt: () => "Who needs help? Reply SELF, FAMILY, FRIEND, CLIENT, or OTHER." },
-  { key: "location", prompt: () => "What city and state is the person in right now?" },
-  { key: "urgency", prompt: () => "What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/deadline within 72 hours, 4 general immigration help." },
-  { key: "aNumber", prompt: () => "If you have an A-number, send it now. If not, reply NONE." },
-  { key: "language", prompt: () => "What language should staff use when calling?" },
-  { key: "details", prompt: () => "Briefly describe what happened. Do not send documents by text unless staff asks." }
+  { key: "fullName", maxLength: 120, prompt: () => "What is your full name?" },
+  { key: "callbackPhone", maxLength: 40, prompt: () => "What phone number should staff call back?" },
+  { key: "personAtRisk", maxLength: 40, prompt: () => "Who needs help? Reply SELF, FAMILY, FRIEND, CLIENT, or OTHER." },
+  { key: "location", maxLength: 120, prompt: () => "What city and state is the person in right now?" },
+  { key: "urgency", maxLength: 240, prompt: () => "What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/removal/deadline within 72 hours, 4 general immigration help." },
+  { key: "language", maxLength: 80, prompt: () => "What language should staff use when calling?" },
+  { key: "details", maxLength: 800, prompt: () => "Briefly describe what happened. Do not text documents, A-numbers, Social Security numbers, or passport numbers." }
 ];
 
+const POLICY_VERSION = "2026-06-29";
+const START_WORDS = new Set(["START"]);
+const YES_WORDS = new Set(["YES", "Y"]);
+const NO_WORDS = new Set(["NO", "N"]);
 const STOP_WORDS = new Set(["STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"]);
 const HELP_WORDS = new Set(["HELP", "INFO"]);
+const MAX_INBOUND_LENGTH = 800;
+const RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
+const RATE_LIMIT_MAX_MESSAGES = 30;
 
-const P0_TERMS = ["ice is here", "at the door", "detained", "custody", "taken", "arrested", "separated"];
-const P1_TERMS = ["tomorrow", "72 hours", "hearing", "court", "deadline", "removal", "deportation"];
+const P0_TERMS = [
+  "ice is here", "at the door", "detained", "custody", "taken", "arrested", "separated",
+  "medical emergency", "needs medicine", "child alone", "minor child"
+];
+const P1_TERMS = ["tomorrow", "72 hours", "hearing", "court", "deadline", "removal", "deportation", "within 3 days"];
 
 export default {
   async fetch(request, env) {
     return handleRequest(request, env);
+  },
+
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(retryPendingAlerts(env));
   }
 };
 
@@ -58,8 +71,21 @@ export async function handleRequest(request, env) {
       return twiml("");
     }
 
-    const reply = await processIncomingSms(env, from, body);
-    return twiml(reply);
+    if (body.length > MAX_INBOUND_LENGTH) {
+      return twiml(`That message is too long. Please resend only the basic facts in ${MAX_INBOUND_LENGTH} characters or fewer. Do not send documents or identification numbers.`);
+    }
+
+    if (!STOP_WORDS.has(body.toUpperCase()) && await isRateLimited(env, from)) {
+      return twiml("Too many messages were received in a short period. Please wait ten minutes and try again. If someone is in immediate physical danger, call 911.");
+    }
+
+    try {
+      const reply = await processIncomingSms(env, from, body);
+      return twiml(reply);
+    } catch (error) {
+      console.error("SMS intake processing failed", error instanceof Error ? error.message : "unknown error");
+      return twiml("We could not process that message. Please try again shortly. If someone is in immediate physical danger, call 911.");
+    }
   }
 
   return json({ error: "not found" }, 404);
@@ -68,9 +94,22 @@ export async function handleRequest(request, env) {
 export async function processIncomingSms(env, from, body) {
   const normalized = body.trim().toUpperCase();
   const key = conversationKey(from);
+  let intake = await loadIntake(env, key);
+  if (intake) {
+    intake.id = intake.id || crypto.randomUUID();
+    intake.policyVersion = intake.policyVersion || POLICY_VERSION;
+    intake.answers = intake.answers || {};
+    intake.audit = Array.isArray(intake.audit) ? intake.audit : [];
+  }
 
   if (STOP_WORDS.has(normalized)) {
-    await env.INTAKE_KV.delete(key);
+    if (intake) {
+      redactIntake(intake);
+      intake.status = "opted_out";
+      intake.updatedAt = nowIso();
+      addAuditEvent(intake, "opted_out");
+      await saveIntake(env, key, intake);
+    }
     return "You have opted out and will not receive further texts from this intake line.";
   }
 
@@ -78,49 +117,91 @@ export async function processIncomingSms(env, from, body) {
     return "This line collects immigration intake information for staff callback. Reply STOP to opt out. If someone is in immediate physical danger, call 911.";
   }
 
-  let intake = await loadIntake(env, key);
-  if (!intake || intake.status !== "open") {
-    intake = {
-      phone: from,
-      status: "open",
-      answers: {},
-      transcript: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+  if (!intake || ["opted_out", "closed_no_consent", "needs_staff_callback"].includes(intake.status)) {
+    if (!START_WORDS.has(normalized)) {
+      if (intake?.status === "needs_staff_callback") {
+        return "Your intake has already been saved for staff callback. Reply START to begin a new intake, HELP for help, or STOP to opt out.";
+      }
+      return "To begin the PallviAgent immigration intake, reply START. Reply HELP for help or STOP to opt out.";
+    }
+    intake = createIntake(from);
     await saveIntake(env, key, intake);
     return STEPS[0].prompt(env);
   }
 
-  intake.transcript.push({ at: new Date().toISOString(), direction: "inbound", text: body });
-
   const step = nextStep(intake);
   if (step?.key === "consent") {
-    if (!["YES", "Y", "START"].includes(normalized)) {
+    if (START_WORDS.has(normalized)) {
+      addAuditEvent(intake, "consent_prompted");
+      intake.updatedAt = nowIso();
+      await saveIntake(env, key, intake);
+      return STEPS[0].prompt(env);
+    }
+    if (NO_WORDS.has(normalized)) {
       intake.status = "closed_no_consent";
-      intake.updatedAt = new Date().toISOString();
+      intake.updatedAt = nowIso();
+      addAuditEvent(intake, "consent_declined");
       await saveIntake(env, key, intake);
       return "We cannot continue by text without consent. Please call the office directly if you need help.";
     }
+    if (!YES_WORDS.has(normalized)) {
+      return "Reply YES to consent and continue, or STOP to opt out. Automated SMS is not legal advice and does not create an attorney-client relationship.";
+    }
     intake.answers.consent = "yes";
+    intake.status = "open";
+    addAuditEvent(intake, "consent_granted");
   } else if (step) {
-    intake.answers[step.key] = body;
+    if (START_WORDS.has(normalized)) {
+      return `Your intake is already active. ${step.prompt(env)}`;
+    }
+    const answer = cleanAnswer(body, step.maxLength || MAX_INBOUND_LENGTH);
+    if (!answer) return step.prompt(env);
+    intake.answers[step.key] = answer;
   }
 
-  intake.updatedAt = new Date().toISOString();
+  intake.updatedAt = nowIso();
+  let urgentAlertSent = false;
+  if (step?.key === "urgency") {
+    intake.priority = classifyPriority(intake);
+    if (["P0", "P1"].includes(intake.priority) && !intake.alert?.lastSuccessfulAt) {
+      urgentAlertSent = await attemptStaffAlert(env, intake, "urgent");
+    }
+  }
+
   const followingStep = nextStep(intake);
   if (followingStep) {
     await saveIntake(env, key, intake);
-    return followingStep.prompt(env);
+    const prefix = urgentAlertSent ? "This appears urgent, and the on-call team has been alerted. Please continue. " : "";
+    return `${prefix}${followingStep.prompt(env)}`;
   }
 
   intake.priority = classifyPriority(intake);
-  intake.summary = summarize(intake);
   intake.status = "needs_staff_callback";
+  addAuditEvent(intake, "intake_completed", { priority: intake.priority });
+  const finalAlertSent = await attemptStaffAlert(env, intake, "complete");
   await saveIntake(env, key, intake);
-  await notifyStaff(env, intake);
 
-  return "Thank you. We sent this intake to the on-call team. Please keep your phone available for a callback. If there is immediate physical danger, call 911.";
+  if (finalAlertSent || intake.alert?.lastSuccessfulAt) {
+    return "Thank you. The on-call team has been alerted. Please keep your phone available for a callback. If there is immediate physical danger, call 911.";
+  }
+  return "Thank you. Your intake was saved, but delivery to on-call staff has not been confirmed. Please try this line again shortly. If someone is in immediate physical danger, call 911.";
+}
+
+function createIntake(phone) {
+  const now = nowIso();
+  const intake = {
+    id: crypto.randomUUID(),
+    phone,
+    policyVersion: POLICY_VERSION,
+    status: "awaiting_consent",
+    answers: {},
+    audit: [],
+    createdAt: now,
+    updatedAt: now
+  };
+  addAuditEvent(intake, "start_received");
+  addAuditEvent(intake, "consent_prompted");
+  return intake;
 }
 
 function nextStep(intake) {
@@ -138,32 +219,21 @@ function classifyPriority(intake) {
   return "P2";
 }
 
-function summarize(intake) {
-  const a = intake.answers;
-  return [
-    `Priority: ${intake.priority}`,
-    `Name: ${a.fullName || "N/A"}`,
-    `Callback: ${a.callbackPhone || intake.phone}`,
-    `Person at risk: ${a.personAtRisk || "N/A"}`,
-    `Location: ${a.location || "N/A"}`,
-    `Urgency: ${a.urgency || "N/A"}`,
-    `A-number: ${a.aNumber || "N/A"}`,
-    `Language: ${a.language || "N/A"}`,
-    `Details: ${a.details || "N/A"}`
-  ].join("\n");
-}
-
-async function notifyStaff(env, intake) {
+async function notifyStaff(env, intake, kind) {
+  if (typeof env.STAFF_NOTIFIER === "function") {
+    return env.STAFF_NOTIFIER(intake, kind);
+  }
   if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_PHONE_NUMBER || !env.STAFF_ALERT_PHONE) {
-    console.log("Staff alert skipped: missing Twilio/staff alert configuration", intake.summary);
-    return;
+    console.error("Staff alert unavailable: missing notification configuration");
+    return { ok: false, code: "configuration_missing" };
   }
 
   const body = [
-    `New immigration emergency intake - ${intake.priority}`,
+    `${kind === "urgent" ? "URGENT" : "New"} PallviAgent intake ${intake.id.slice(0, 8)} - ${intake.priority}`,
     `Location: ${intake.answers.location || "N/A"}`,
     `Language: ${intake.answers.language || "N/A"}`,
-    `Callback: ${intake.answers.callbackPhone || intake.phone}`
+    `Callback: ${intake.answers.callbackPhone || intake.phone}`,
+    kind === "urgent" ? "Initial alert; intake may still be in progress." : "Intake complete; call the listed callback number."
   ].join("\n");
 
   const credentials = btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
@@ -183,8 +253,62 @@ async function notifyStaff(env, intake) {
   });
 
   if (!response.ok) {
-    console.log("Staff alert failed", response.status, await response.text());
+    console.error("Staff alert failed", response.status);
+    return { ok: false, code: `twilio_${response.status}` };
   }
+  return { ok: true };
+}
+
+async function attemptStaffAlert(env, intake, kind) {
+  intake.alert = intake.alert || { attempts: 0 };
+  intake.alert.attempts += 1;
+  intake.alert.lastAttemptAt = nowIso();
+  intake.alert.pendingKind = kind;
+
+  let result;
+  try {
+    result = await notifyStaff(env, intake, kind);
+  } catch (error) {
+    console.error("Staff alert request failed", error instanceof Error ? error.message : "unknown error");
+    result = { ok: false, code: "request_failed" };
+  }
+
+  if (result.ok) {
+    intake.alert.status = "sent";
+    intake.alert.lastSuccessfulAt = nowIso();
+    intake.alert.pendingKind = null;
+    intake.alert.lastErrorCode = null;
+    addAuditEvent(intake, "staff_alert_sent", { kind });
+    return true;
+  }
+
+  intake.alert.status = "pending_retry";
+  intake.alert.lastErrorCode = result.code || "unknown";
+  addAuditEvent(intake, "staff_alert_failed", { kind, code: intake.alert.lastErrorCode });
+  return false;
+}
+
+export async function retryPendingAlerts(env) {
+  if (!env.INTAKE_KV?.list) return { checked: 0, retried: 0 };
+  let cursor;
+  let checked = 0;
+  let retried = 0;
+
+  do {
+    const page = await env.INTAKE_KV.list({ prefix: "conversation:", cursor, limit: 100 });
+    for (const item of page.keys || []) {
+      checked += 1;
+      const intake = await loadIntake(env, item.name);
+      if (!intake?.alert?.pendingKind || intake.alert.attempts >= 3) continue;
+      await attemptStaffAlert(env, intake, intake.alert.pendingKind);
+      intake.updatedAt = nowIso();
+      await saveIntake(env, item.name, intake);
+      retried += 1;
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+
+  return { checked, retried };
 }
 
 async function isValidTwilioRequest(request, env) {
@@ -241,11 +365,23 @@ function timingSafeEqual(left, right) {
 
 async function loadIntake(env, key) {
   const raw = await env.INTAKE_KV.get(key);
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    console.error("Invalid intake record encountered");
+    return null;
+  }
 }
 
 async function saveIntake(env, key, intake) {
-  await env.INTAKE_KV.put(key, JSON.stringify(intake), { expirationTtl: 60 * 60 * 24 * 90 });
+  const auditOnly = ["opted_out", "closed_no_consent"].includes(intake.status);
+  const days = auditOnly
+    ? 90
+    : intake.status === "needs_staff_callback"
+      ? clampNumber(env.DATA_RETENTION_DAYS, 1, 90, 30)
+      : 7;
+  await env.INTAKE_KV.put(key, JSON.stringify(intake), { expirationTtl: 60 * 60 * 24 * days });
 }
 
 function conversationKey(phone) {
@@ -253,7 +389,45 @@ function conversationKey(phone) {
 }
 
 function normalizePhone(value) {
-  return String(value || "").replace(/[^\d+]/g, "");
+  const phone = String(value || "").replace(/[^\d+]/g, "");
+  return /^\+\d{8,15}$/.test(phone) ? phone : "";
+}
+
+function cleanAnswer(value, maxLength) {
+  return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function redactIntake(intake) {
+  intake.answers = {};
+  delete intake.priority;
+  delete intake.summary;
+  delete intake.alert;
+  delete intake.transcript;
+}
+
+function addAuditEvent(intake, type, metadata = {}) {
+  intake.audit = Array.isArray(intake.audit) ? intake.audit : [];
+  intake.audit.push({ at: nowIso(), type, policyVersion: intake.policyVersion || POLICY_VERSION, ...metadata });
+  intake.audit = intake.audit.slice(-50);
+}
+
+async function isRateLimited(env, phone) {
+  if (!env.INTAKE_KV) return false;
+  const window = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
+  const key = `rate:${phone}:${window}`;
+  const count = Number(await env.INTAKE_KV.get(key)) || 0;
+  if (count >= RATE_LIMIT_MAX_MESSAGES) return true;
+  await env.INTAKE_KV.put(key, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_SECONDS });
+  return false;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+function nowIso() {
+  return new Date().toISOString();
 }
 
 function twiml(message) {
@@ -293,12 +467,14 @@ const PRIVACY_POLICY_HTML = `<!doctype html>
 <p>Last updated: June 29, 2026</p>
 <p>PallviAgent respects your privacy. This Privacy Policy explains how information is collected, used, and protected when you contact the emergency immigration intake line by SMS or related intake channels.</p>
 <h2>Information Collected</h2>
-<p>The intake line may collect information you choose to provide, including your name, phone number, callback phone number, preferred language, location, A-number if provided, basic immigration emergency details, message contents, and message timestamps.</p>
+<p>The intake line may collect information you choose to provide, including your name, phone number, callback phone number, preferred language, location, basic immigration emergency details, consent status, and message timestamps. The automated intake does not ask for A-numbers, Social Security numbers, passport numbers, or documents.</p>
 <h2>SMS Information</h2>
 <p>If you contact the intake line by SMS, the system may collect your phone number, message contents, timestamps, language preference, and basic intake information you provide. This information is used to respond to your request, route it to appropriate staff, maintain records, and support operational obligations.</p>
 <p>Mobile information will not be shared with third parties or affiliates for marketing or promotional purposes. Text messaging originator opt-in data and consent will not be shared with any third parties. Personal information collected through SMS is not sold or rented.</p>
 <h2>SMS Consent</h2>
 <p>Users opt in by reviewing the public <a href="sms-opt-in.html">SMS opt-in page</a>, texting START to +1 (516) 871-4383, and replying YES to the consent prompt. Messages relate only to the user's intake, callback, appointment, or service request. Message and data rates may apply. Message frequency varies. Reply <strong>STOP</strong> to opt out or <strong>HELP</strong> for help.</p>
+<h2>Security and Retention</h2>
+<p>Do not send documents, A-numbers, Social Security numbers, passport numbers, or other highly sensitive identifiers by SMS. Incomplete intake records expire after seven days, completed intake records after up to 30 days, and minimal consent or opt-out audit records after up to 90 days. Replying STOP removes intake answers from the active SMS record.</p>
 <h2>Contact</h2>
 <p>For SMS assistance, reply HELP to +1 (516) 871-4383.</p>
 </main>
@@ -341,7 +517,7 @@ const SMS_OPT_IN_HTML = `<!doctype html>
 <p>By texting START and then replying YES, you agree to receive conversational SMS messages from PallviAgent about your immigration intake or emergency callback request.</p>
 <ul><li>Message frequency varies during an active intake.</li><li>Message and data rates may apply.</li><li>Reply <strong>STOP</strong> to opt out.</li><li>Reply <strong>HELP</strong> for help.</li><li>Consent is not a condition of purchasing goods or services.</li></ul>
 <h2>Important safety notice</h2>
-<p>This line is not monitored continuously. If someone is in immediate physical danger, call 911. Do not send documents or highly sensitive information unless staff specifically asks.</p>
+<p>This line is not monitored continuously. If someone is in immediate physical danger, call 911. Do not send documents, A-numbers, Social Security numbers, passport numbers, or other highly sensitive identifiers by SMS.</p>
 <p><a href="privacy-policy.html">Privacy Policy</a> | <a href="terms.html">SMS Terms and Conditions</a></p>
 </main>
 </body>

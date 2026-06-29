@@ -11,7 +11,8 @@ The `worker/` directory contains a Cloudflare Worker version of the intake syste
 - `GET /privacy-policy.html` and `GET /terms.html` as backup policy URLs.
 - Cloudflare KV storage for conversation state.
 - Optional Twilio request signature validation.
-- Optional staff SMS alerts using the Twilio REST API.
+- Staff SMS alerts using the Twilio REST API, with immediate urgent alerts and automatic retries.
+- Minimal consent and opt-out audit events with bounded retention.
 
 ## Cloudflare Setup
 
@@ -42,6 +43,7 @@ INTAKE_ORG_NAME=PallviAgent
 PUBLIC_BASE_URL=https://pallvi-agent.rohitverma7734.workers.dev
 VALIDATE_TWILIO_SIGNATURE=true
 GEMINI_MODEL=gemini-2.0-flash
+DATA_RETENTION_DAYS=30
 ```
 
 Secrets:
@@ -55,7 +57,15 @@ STAFF_ALERT_EMAIL
 GEMINI_API_KEY
 ```
 
-`GEMINI_API_KEY` and `STAFF_ALERT_EMAIL` are optional in the Worker version. Staff alert SMS requires the Twilio values and `STAFF_ALERT_PHONE`.
+`GEMINI_API_KEY` and `STAFF_ALERT_EMAIL` are optional in the Worker version. Staff alert SMS requires the Twilio values and `STAFF_ALERT_PHONE`. Do not launch overnight intake until all four Twilio/staff alert secrets are configured and a real alert has been received by staff.
+
+## Operational Behavior
+
+- A sender must text `START` and then `YES` before intake questions begin.
+- P0/P1 answers trigger an immediate minimized staff alert; completion triggers a final handoff alert.
+- Failed staff alerts are retried every five minutes, up to three total attempts.
+- Incomplete intake state expires after seven days. Completed intake state defaults to 30 days. Minimal declined-consent and opt-out audit records expire after 90 days.
+- The automated flow never asks for documents, A-numbers, Social Security numbers, or passport numbers.
 
 ## Cloudflare GitHub Build Settings
 

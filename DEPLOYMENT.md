@@ -27,6 +27,9 @@ STAFF_ALERT_PHONE=...
 STAFF_ALERT_EMAIL=...
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.0-flash
+ADMIN_API_TOKEN=generate-a-long-random-secret
+ENABLE_SIMULATOR=false
+ENABLE_DEBUG_OUTPUT=false
 ```
 
 `GEMINI_API_KEY` is optional. If it is blank, the app uses deterministic fallback staff notes.

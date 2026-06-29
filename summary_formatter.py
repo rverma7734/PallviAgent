@@ -34,7 +34,6 @@ TRIAGE DETAILS
 Person at Risk: {fields.get('person_at_risk', 'N/A')}
 Current Location: {fields.get('location', 'N/A')}
 Urgency: {fields.get('urgency', 'N/A')}
-A-number: {fields.get('a_number', 'N/A')}
 Language: {fields.get('language', 'N/A')}
 
 CLIENT DETAILS
@@ -68,7 +67,6 @@ Facts:
 - Person at Risk: {fields.get('person_at_risk', 'N/A')}
 - Current Location: {fields.get('location', 'N/A')}
 - Urgency: {fields.get('urgency', 'N/A')}
-- A-number: {fields.get('a_number', 'N/A')}
 - Language: {fields.get('language', 'N/A')}
 - Details: {fields.get('details', 'N/A')}
 """
@@ -79,7 +77,6 @@ Facts:
             'used_fallback': False,
             'fallback_reason': None,
             'http_status': None,
-            'response_preview': None,
         }
 
         fallback_notes = self._fallback_notes(fields)
@@ -108,7 +105,6 @@ Facts:
             resp.raise_for_status()
             result = resp.json()
             notes = self._parse_gemini_response(result)
-            debug['response_preview'] = (notes or '')[:200]
             if not notes:
                 debug['used_fallback'] = True
                 debug['fallback_reason'] = 'empty_gemini_response'
