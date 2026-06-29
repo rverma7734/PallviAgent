@@ -40,7 +40,7 @@ Variables:
 
 ```text
 INTAKE_ORG_NAME=PallviAgent
-PUBLIC_BASE_URL=https://pallvi-agent.rohitverma7734.workers.dev
+PUBLIC_BASE_URL=https://pallviagent.rohitverma7734.workers.dev
 VALIDATE_TWILIO_SIGNATURE=true
 GEMINI_MODEL=gemini-2.0-flash
 DATA_RETENTION_DAYS=30
@@ -96,7 +96,7 @@ npm test
 After Cloudflare deploys, set the Twilio incoming SMS webhook to:
 
 ```text
-https://pallvi-agent.rohitverma7734.workers.dev/sms
+https://pallviagent.rohitverma7734.workers.dev/sms
 ```
 
 Method: `POST`.
@@ -104,9 +104,9 @@ Method: `POST`.
 ## Smoke Tests
 
 ```bash
-curl https://pallvi-agent.rohitverma7734.workers.dev/health
-curl -I https://pallvi-agent.rohitverma7734.workers.dev/privacy-policy.html
-curl -I https://pallvi-agent.rohitverma7734.workers.dev/terms.html
+curl https://pallviagent.rohitverma7734.workers.dev/health
+curl -I https://pallviagent.rohitverma7734.workers.dev/privacy-policy.html
+curl -I https://pallviagent.rohitverma7734.workers.dev/terms.html
 ```
 
 The existing GitHub Pages URLs remain valid for A2P registration:
