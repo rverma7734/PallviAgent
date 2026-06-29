@@ -86,3 +86,9 @@ See `DEPLOYMENT.md` for Render deployment and Twilio webhook setup.
 For the lower-cost Cloudflare Workers deployment path, see `CLOUDFLARE_DEPLOYMENT.md`.
 
 The Flask-only `/simulate` route is disabled unless `ENABLE_SIMULATOR=true`. Its conversation inspection routes require `Authorization: Bearer $ADMIN_API_TOKEN` and remain unavailable when no admin token is configured.
+
+## Workflow preview
+
+Open `preview.html` in a browser to review the sender conversation and staff handoff with fake data. The preview is standalone and never sends messages or writes intake records.
+
+![PallviAgent intake preview](docs/screenshots/intake-preview-wide.png)
