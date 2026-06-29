@@ -7,7 +7,6 @@ REQUIRED_FIELDS = [
     'person_at_risk',
     'location',
     'urgency',
-    'a_number',
     'language',
     'details',
 ]
@@ -18,10 +17,9 @@ FIELD_QUESTIONS = {
     'callback_phone': 'What phone number should staff call back?',
     'person_at_risk': 'Who needs help? Reply SELF, FAMILY, FRIEND, CLIENT, or OTHER.',
     'location': 'What city and state is the person in right now?',
-    'urgency': 'What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/deadline within 72 hours, 4 general immigration help.',
-    'a_number': 'If you have an A-number, send it now. If not, reply NONE.',
+    'urgency': 'What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/removal/deadline within 72 hours, 4 general immigration help.',
     'language': 'What language should staff use when calling?',
-    'details': 'Briefly describe what happened. Do not send documents by text unless staff asks.',
+    'details': 'Briefly describe what happened. Do not text documents, A-numbers, Social Security numbers, or passport numbers.',
 }
 
 PRIORITY_P0_TERMS = [
@@ -60,7 +58,6 @@ class AIProcessor:
                 'provider': 'deterministic',
                 'used_fallback': False,
                 'missing_fields': needed,
-                'extracted_fields': extracted,
                 'selected_next_field': needed[0] if needed else None,
             },
         }

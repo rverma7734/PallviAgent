@@ -3,6 +3,7 @@ Immigration Intake Agent - Server
 Receives SMS webhooks and orchestrates the intake conversation
 """
 import os
+import secrets
 
 from flask import Flask, request, jsonify, send_from_directory
 from twilio.request_validator import RequestValidator
@@ -25,6 +26,8 @@ notifier = Notify()
 VALIDATE_TWILIO_SIGNATURE = os.getenv('VALIDATE_TWILIO_SIGNATURE', '').lower() == 'true'
 PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', '').rstrip('/')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
+ADMIN_API_TOKEN = os.getenv('ADMIN_API_TOKEN', '')
+ENABLE_SIMULATOR = os.getenv('ENABLE_SIMULATOR', '').lower() == 'true'
 
 DISCLAIMER = """You have reached our emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.
 
@@ -54,32 +57,37 @@ def _is_valid_twilio_request():
     return validator.validate(_twilio_validation_url(), request.form, signature)
 
 
-def _log_intake_debug(sender: str, debug: dict):
+def _log_intake_debug(_sender: str, debug: dict):
     if not debug:
         return
     print(
         "[INTAKE DEBUG] "
-        f"sender={sender} "
         f"provider={debug.get('provider')} "
         f"missing_fields={debug.get('missing_fields')} "
         f"selected_next_field={debug.get('selected_next_field')}"
     )
 
 
-def _log_summary_debug(sender: str, debug: dict):
+def _log_summary_debug(_sender: str, debug: dict):
     if not debug:
         return
     print(
         "[SUMMARY DEBUG] "
-        f"sender={sender} "
         f"provider={debug.get('provider')} "
         f"model={debug.get('model')} "
         f"api_configured={debug.get('api_configured')} "
         f"http_status={debug.get('http_status')} "
         f"used_fallback={debug.get('used_fallback')} "
-        f"fallback_reason={debug.get('fallback_reason')} "
-        f"response_preview={debug.get('response_preview')}"
+        f"fallback_reason={debug.get('fallback_reason')}"
     )
+
+
+def _is_admin_request():
+    if not ADMIN_API_TOKEN:
+        return False
+    authorization = request.headers.get('Authorization', '')
+    expected = f"Bearer {ADMIN_API_TOKEN}"
+    return secrets.compare_digest(authorization, expected)
 
 
 def process_incoming_message(sender: str, message: str, notify_attorney: bool = True) -> dict:
@@ -175,7 +183,6 @@ def handle_sms():
     if not message:
         return '', 200
 
-    print(f"Incoming from {sender}: {message}")
     result = process_incoming_message(sender, message, notify_attorney=True)
     twiml = MessagingResponse()
     twiml.message(result['response'])
@@ -199,11 +206,15 @@ def health():
 
 @app.route('/conversations', methods=['GET'])
 def list_conversations():
+    if not _is_admin_request():
+        return jsonify({'error': 'not found'}), 404
     return jsonify({'conversations': conversation_manager.list_conversations()})
 
 
 @app.route('/conversations/<path:phone>', methods=['GET'])
 def get_conversation(phone):
+    if not _is_admin_request():
+        return jsonify({'error': 'not found'}), 404
     conversation = conversation_manager.get_conversation(phone)
     if not conversation:
         return jsonify({'error': 'conversation not found'}), 404
@@ -212,14 +223,14 @@ def get_conversation(phone):
 
 @app.route('/simulate', methods=['POST'])
 def simulate():
+    if not ENABLE_SIMULATOR and not app.testing:
+        return jsonify({'error': 'not found'}), 404
     data = request.get_json(silent=True) or {}
     sender = data.get('sender', 'test_client')
     message = (data.get('message') or '').strip()
 
     if not message:
         return jsonify({'error': 'message is required'}), 400
-
-    print(f"[SIMULATE] From {sender}: {message}")
 
     if message.upper() == 'CLEAR':
         conversation_manager.clear_conversation(sender)
@@ -232,13 +243,6 @@ def simulate():
 
     result = process_incoming_message(sender, message, notify_attorney=False)
 
-    if result['intake_complete'] and result.get('summary_text'):
-        print(f"\n{'='*50}")
-        print('INTAKE COMPLETE - SUMMARY:')
-        print(f"{'='*50}")
-        print(result['summary_text'])
-        print(f"{'='*50}\n")
-
     return jsonify(result)
 
 
@@ -246,4 +250,4 @@ if __name__ == '__main__':
     print('=' * 50)
     print('Immigration Intake Agent - Running')
     print('=' * 50)
-    app.run(host='0.0.0.0', port=5005, debug=True)
+    app.run(host='0.0.0.0', port=5005, debug=os.getenv('FLASK_DEBUG', '').lower() == 'true')

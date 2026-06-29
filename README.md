@@ -1,6 +1,6 @@
 # PallviAgent
 
-SMS-based emergency immigration intake prototype built with Flask, SQLite, Twilio, and optional Gemini-assisted summary notes.
+SMS-based emergency immigration intake and staff callback router. The Cloudflare Worker in `worker/` is the production deployment target; the Flask service remains available for local development and fallback testing.
 
 The app is designed for intake and staff callback routing only. It should not provide legal advice by SMS.
 
@@ -35,9 +35,10 @@ The conversation collects:
 - Whether the caller, family, friend, client, or another person needs help
 - Current city/state
 - Urgency category
-- A-number if available
 - Preferred callback language
 - Brief facts
+
+The production Worker requires `START` followed by `YES`, alerts staff as soon as a P0/P1 urgency answer is received, sends a minimized final handoff, and retries failed staff alerts. It intentionally does not request documents or government identification numbers over SMS.
 
 Completed intakes are classified:
 
@@ -83,3 +84,5 @@ This enables Twilio request signature validation for `/sms`.
 See `DEPLOYMENT.md` for Render deployment and Twilio webhook setup.
 
 For the lower-cost Cloudflare Workers deployment path, see `CLOUDFLARE_DEPLOYMENT.md`.
+
+The Flask-only `/simulate` route is disabled unless `ENABLE_SIMULATOR=true`. Its conversation inspection routes require `Authorization: Bearer $ADMIN_API_TOKEN` and remain unavailable when no admin token is configured.

@@ -11,3 +11,7 @@ INTAKE_ORG_NAME = "PallviAgent"
 PUBLIC_BASE_URL = "https://pallvi-agent.rohitverma7734.workers.dev"
 VALIDATE_TWILIO_SIGNATURE = "true"
 GEMINI_MODEL = "gemini-2.0-flash"
+DATA_RETENTION_DAYS = "30"
+
+[triggers]
+crons = ["*/5 * * * *"]
