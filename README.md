@@ -21,6 +21,7 @@ python3 -m venv .venv
 ## Key routes
 
 - `/sms` - Twilio webhook
+- `/telnyx/sms` - Telnyx API v2 messaging webhook
 - `/simulate` - local testing endpoint
 - `/conversations` - list saved conversations
 - `/conversations/<phone>` - full conversation detail
@@ -84,6 +85,8 @@ This enables Twilio request signature validation for `/sms`.
 See `DEPLOYMENT.md` for Render deployment and Twilio webhook setup.
 
 For the lower-cost Cloudflare Workers deployment path, see `CLOUDFLARE_DEPLOYMENT.md`.
+
+For the parallel Telnyx provider setup, campaign copy, and webhook configuration, see `TELNYX_SETUP.md`.
 
 The Flask-only `/simulate` route is disabled unless `ENABLE_SIMULATOR=true`. Its conversation inspection routes require `Authorization: Bearer $ADMIN_API_TOKEN` and remain unavailable when no admin token is configured.
 

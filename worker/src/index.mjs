@@ -30,16 +30,19 @@ const P0_TERMS = [
 const P1_TERMS = ["tomorrow", "72 hours", "hearing", "court", "deadline", "removal", "deportation", "within 3 days"];
 
 export default {
-  async fetch(request, env) {
-    return handleRequest(request, env);
+  async fetch(request, env, ctx) {
+    return handleRequest(request, env, ctx);
   },
 
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(retryPendingAlerts(env));
+    ctx.waitUntil(Promise.all([
+      retryPendingAlerts(env),
+      retryPendingTelnyxJobs(env)
+    ]));
   }
 };
 
-export async function handleRequest(request, env) {
+export async function handleRequest(request, env, ctx) {
   const url = new URL(request.url);
 
   if (request.method === "GET" && url.pathname === "/health") {
@@ -88,7 +91,70 @@ export async function handleRequest(request, env) {
     }
   }
 
+  if (request.method === "POST" && url.pathname === "/telnyx/sms") {
+    return handleTelnyxWebhook(request, env, ctx);
+  }
+
   return json({ error: "not found" }, 404);
+}
+
+async function handleTelnyxWebhook(request, env, ctx) {
+  const rawBody = await request.text();
+  if (rawBody.length > 64 * 1024) {
+    return json({ error: "payload too large" }, 413);
+  }
+  if (!(await isValidTelnyxRequest(rawBody, request.headers, env))) {
+    return json({ error: "invalid signature" }, 403);
+  }
+
+  let event;
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return json({ error: "invalid payload" }, 400);
+  }
+
+  if (event?.data?.event_type !== "message.received") {
+    return json({ received: true });
+  }
+
+  const payload = event.data.payload || {};
+  const eventId = cleanIdentifier(event.data.id || payload.id);
+  const from = normalizePhone(payload.from?.phone_number);
+  const to = normalizePhone(payload.to?.[0]?.phone_number);
+  const body = String(payload.text || "").trim();
+  if (!eventId || !from || !to) {
+    return json({ received: true });
+  }
+
+  const eventKey = telnyxEventKey(eventId);
+  if (await env.INTAKE_KV.get(eventKey)) {
+    return json({ received: true, duplicate: true });
+  }
+
+  const jobKey = telnyxJobKey(eventId);
+  const job = {
+    id: eventId,
+    from,
+    to,
+    body,
+    hasMedia: Array.isArray(payload.media) && payload.media.length > 0,
+    attempts: 0,
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  await env.INTAKE_KV.put(eventKey, "received", { expirationTtl: 60 * 60 * 24 });
+  await saveTelnyxJob(env, jobKey, job);
+
+  const work = processTelnyxJob(env, jobKey).catch((error) => {
+    console.error("Telnyx inbound processing failed", error instanceof Error ? error.message : "unknown error");
+  });
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(work);
+  } else {
+    await work;
+  }
+  return json({ received: true });
 }
 
 export async function processIncomingSms(env, from, body) {
@@ -223,11 +289,6 @@ async function notifyStaff(env, intake, kind) {
   if (typeof env.STAFF_NOTIFIER === "function") {
     return env.STAFF_NOTIFIER(intake, kind);
   }
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_PHONE_NUMBER || !env.STAFF_ALERT_PHONE) {
-    console.error("Staff alert unavailable: missing notification configuration");
-    return { ok: false, code: "configuration_missing" };
-  }
-
   const body = [
     `${kind === "urgent" ? "URGENT" : "New"} PallviAgent intake ${intake.id.slice(0, 8)} - ${intake.priority}`,
     `Location: ${intake.answers.location || "N/A"}`,
@@ -235,6 +296,24 @@ async function notifyStaff(env, intake, kind) {
     `Callback: ${intake.answers.callbackPhone || intake.phone}`,
     kind === "urgent" ? "Initial alert; intake may still be in progress." : "Intake complete; call the listed callback number."
   ].join("\n");
+
+  const provider = String(env.STAFF_ALERT_PROVIDER || "twilio").toLowerCase();
+  if (provider === "telnyx") {
+    if (!env.STAFF_ALERT_PHONE || !env.TELNYX_PHONE_NUMBER) {
+      console.error("Telnyx staff alert unavailable: missing notification configuration");
+      return { ok: false, code: "configuration_missing" };
+    }
+    return sendTelnyxMessage(env, {
+      from: env.TELNYX_PHONE_NUMBER,
+      to: env.STAFF_ALERT_PHONE,
+      text: body
+    });
+  }
+
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_PHONE_NUMBER || !env.STAFF_ALERT_PHONE) {
+    console.error("Twilio staff alert unavailable: missing notification configuration");
+    return { ok: false, code: "configuration_missing" };
+  }
 
   const credentials = btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
   const params = new URLSearchParams({
@@ -255,6 +334,29 @@ async function notifyStaff(env, intake, kind) {
   if (!response.ok) {
     console.error("Staff alert failed", response.status);
     return { ok: false, code: `twilio_${response.status}` };
+  }
+  return { ok: true };
+}
+
+async function sendTelnyxMessage(env, message) {
+  if (typeof env.TELNYX_MESSAGE_SENDER === "function") {
+    return env.TELNYX_MESSAGE_SENDER(message);
+  }
+  if (!env.TELNYX_API_KEY) {
+    return { ok: false, code: "configuration_missing" };
+  }
+
+  const response = await fetch("https://api.telnyx.com/v2/messages", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.TELNYX_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(message)
+  });
+  if (!response.ok) {
+    console.error("Telnyx message failed", response.status);
+    return { ok: false, code: `telnyx_${response.status}` };
   }
   return { ok: true };
 }
@@ -311,6 +413,105 @@ export async function retryPendingAlerts(env) {
   return { checked, retried };
 }
 
+async function processTelnyxJob(env, jobKey) {
+  const job = await loadJson(env, jobKey);
+  if (!job || job.attempts >= 3) return false;
+
+  if (!job.reply) {
+    if (job.hasMedia && !job.body) {
+      job.reply = "PallviAgent cannot accept MMS attachments. Please resend only basic facts by text. Do not send documents or identification numbers.";
+    } else if (!job.body) {
+      job.reply = "Reply START to begin the PallviAgent immigration intake, HELP for help, or STOP to opt out.";
+    } else if (job.body.length > MAX_INBOUND_LENGTH) {
+      job.reply = `That message is too long. Please resend only the basic facts in ${MAX_INBOUND_LENGTH} characters or fewer. Do not send documents or identification numbers.`;
+    } else if (!STOP_WORDS.has(job.body.toUpperCase()) && await isRateLimited(env, job.from)) {
+      job.reply = "Too many messages were received in a short period. Please wait ten minutes and try again. If someone is in immediate physical danger, call 911.";
+    } else {
+      job.reply = await processIncomingSms(env, job.from, job.body);
+    }
+    job.updatedAt = nowIso();
+    await saveTelnyxJob(env, jobKey, job);
+  }
+
+  let result;
+  try {
+    result = await sendTelnyxMessage(env, {
+      from: job.to,
+      to: job.from,
+      text: job.reply
+    });
+  } catch (error) {
+    console.error("Telnyx reply request failed", error instanceof Error ? error.message : "unknown error");
+    result = { ok: false, code: "request_failed" };
+  }
+  if (result.ok) {
+    await env.INTAKE_KV.delete(jobKey);
+    return true;
+  }
+
+  job.attempts += 1;
+  job.lastErrorCode = result.code || "unknown";
+  job.updatedAt = nowIso();
+  await saveTelnyxJob(env, jobKey, job);
+  return false;
+}
+
+export async function retryPendingTelnyxJobs(env) {
+  if (!env.INTAKE_KV?.list) return { checked: 0, retried: 0 };
+  const page = await env.INTAKE_KV.list({ prefix: "provider-job:telnyx:", limit: 100 });
+  let retried = 0;
+  for (const item of page.keys || []) {
+    const job = await loadJson(env, item.name);
+    if (!job || job.attempts >= 3) continue;
+    await processTelnyxJob(env, item.name);
+    retried += 1;
+  }
+  return { checked: (page.keys || []).length, retried };
+}
+
+async function isValidTelnyxRequest(rawBody, headers, env) {
+  if (String(env.VALIDATE_TELNYX_SIGNATURE || "").toLowerCase() !== "true") {
+    return true;
+  }
+  if (!env.TELNYX_PUBLIC_KEY) {
+    console.error("Telnyx signature validation enabled but TELNYX_PUBLIC_KEY is missing");
+    return false;
+  }
+
+  const signature = headers.get("telnyx-signature-ed25519") || "";
+  const timestamp = headers.get("telnyx-timestamp") || "";
+  const timestampNumber = Number(timestamp);
+  if (!signature || !Number.isFinite(timestampNumber)) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - timestampNumber) > 5 * 60) return false;
+
+  try {
+    const { format, bytes } = parseTelnyxPublicKey(env.TELNYX_PUBLIC_KEY);
+    const key = await crypto.subtle.importKey(format, bytes, { name: "Ed25519" }, false, ["verify"]);
+    return crypto.subtle.verify(
+      { name: "Ed25519" },
+      key,
+      base64ToBytes(signature),
+      new TextEncoder().encode(`${timestamp}|${rawBody}`)
+    );
+  } catch (error) {
+    console.error("Telnyx signature verification failed", error instanceof Error ? error.message : "unknown error");
+    return false;
+  }
+}
+
+function parseTelnyxPublicKey(value) {
+  const key = String(value || "").trim();
+  if (key.includes("BEGIN PUBLIC KEY")) {
+    const encoded = key.replace(/-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\s/g, "");
+    return { format: "spki", bytes: base64ToBytes(encoded) };
+  }
+  if (/^[0-9a-fA-F]{64}$/.test(key)) {
+    return { format: "raw", bytes: Uint8Array.from(key.match(/.{2}/g), (byte) => Number.parseInt(byte, 16)) };
+  }
+  const bytes = base64ToBytes(key);
+  return { format: bytes.length === 32 ? "raw" : "spki", bytes };
+}
+
 async function isValidTwilioRequest(request, env) {
   if (String(env.VALIDATE_TWILIO_SIGNATURE || "").toLowerCase() !== "true") {
     return true;
@@ -364,6 +565,10 @@ function timingSafeEqual(left, right) {
 }
 
 async function loadIntake(env, key) {
+  return loadJson(env, key);
+}
+
+async function loadJson(env, key) {
   const raw = await env.INTAKE_KV.get(key);
   if (!raw) return null;
   try {
@@ -372,6 +577,10 @@ async function loadIntake(env, key) {
     console.error("Invalid intake record encountered");
     return null;
   }
+}
+
+async function saveTelnyxJob(env, key, job) {
+  await env.INTAKE_KV.put(key, JSON.stringify(job), { expirationTtl: 60 * 60 * 24 });
 }
 
 async function saveIntake(env, key, intake) {
@@ -388,6 +597,18 @@ function conversationKey(phone) {
   return `conversation:${phone}`;
 }
 
+function telnyxEventKey(id) {
+  return `provider-event:telnyx:${id}`;
+}
+
+function telnyxJobKey(id) {
+  return `provider-job:telnyx:${id}`;
+}
+
+function cleanIdentifier(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 128);
+}
+
 function normalizePhone(value) {
   const phone = String(value || "").replace(/[^\d+]/g, "");
   return /^\+\d{8,15}$/.test(phone) ? phone : "";
@@ -395,6 +616,11 @@ function normalizePhone(value) {
 
 function cleanAnswer(value, maxLength) {
   return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(String(value || ""));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function redactIntake(intake) {
