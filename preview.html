@@ -373,23 +373,23 @@
         summary: "Family member detained by ICE tonight. Sender is available at the callback number and requests a Spanish-speaking staff member.",
         messages: [
           ["user", "START"],
-          ["agent", "You have reached PallviAgent emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.\n\nReply YES to continue by text, or STOP to opt out."],
+          ["agent", "You have reached PallviAgent emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.\n\nReply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out."],
           ["user", "YES"],
-          ["agent", "What is your full name?"],
-          ["user", "Test Person"],
-          ["agent", "What phone number should staff call back?"],
+          ["agent", "PallviAgent: Choose your language / Elija su idioma. Reply 1 for English. Responda 2 para Español. Reply STOP to opt out."],
+          ["user", "2"],
+          ["agent", "¿Cuál es su nombre completo?"],
+          ["user", "Persona de Prueba"],
+          ["agent", "¿A qué número debe llamar el personal?"],
           ["user", "+1 (555) 555-0999"],
-          ["agent", "Who needs help? Reply SELF, FAMILY, FRIEND, CLIENT, or OTHER."],
-          ["user", "FAMILY"],
-          ["agent", "What city and state is the person in right now?"],
+          ["agent", "¿Quién necesita ayuda? Responda YO, FAMILIAR, AMIGO, CLIENTE u OTRO."],
+          ["user", "FAMILIAR"],
+          ["agent", "¿En qué ciudad y estado se encuentra la persona ahora?"],
           ["user", "Newark, NJ"],
-          ["agent", "What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/removal/deadline within 72 hours, 4 general immigration help."],
-          ["user", "2 detained now", "urgent"],
-          ["agent", "This appears urgent, and the on-call team has been alerted. Please continue. What language should staff use when calling?"],
-          ["user", "Spanish"],
-          ["agent", "Briefly describe what happened. Do not text documents, A-numbers, Social Security numbers, or passport numbers."],
-          ["user", "ICE detained a family member tonight."],
-          ["agent", "Thank you. The on-call team has been alerted. Please keep your phone available for a callback. If there is immediate physical danger, call 911.", "complete"]
+          ["agent", "¿Qué está pasando? Responda 1 ICE está aquí ahora, 2 detenido ahora, 3 audiencia/remoción/plazo dentro de 72 horas, 4 ayuda general de inmigración."],
+          ["user", "2 detenido ahora", "urgent"],
+          ["agent", "Esto parece urgente y se alertó al equipo de guardia. Continúe. Describa brevemente lo ocurrido. No envíe documentos, números A, números de Seguro Social ni números de pasaporte por texto."],
+          ["user", "ICE detuvo a un familiar esta noche."],
+          ["agent", "Gracias. Se alertó al equipo de guardia. Mantenga su teléfono disponible para una llamada. Si hay peligro físico inmediato, llame al 911.", "complete"]
         ]
       },
       general: {
@@ -403,13 +403,13 @@
         summary: "Sender requests a callback about a recently received immigration notice. No immediate detention, removal, or deadline was reported.",
         messages: [
           ["user", "START"],
-          ["agent", "You have reached PallviAgent emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship.\n\nReply YES to continue by text, or STOP to opt out."],
-          ["user", "YES"], ["agent", "What is your full name?"], ["user", "Test Person"],
+          ["agent", "You have reached PallviAgent emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship.\n\nReply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out."],
+          ["user", "YES"], ["agent", "PallviAgent: Choose your language / Elija su idioma. Reply 1 for English. Responda 2 para Español. Reply STOP to opt out."], ["user", "1"],
+          ["agent", "What is your full name?"], ["user", "Test Person"],
           ["agent", "What phone number should staff call back?"], ["user", "+1 (555) 555-0144"],
           ["agent", "Who needs help? Reply SELF, FAMILY, FRIEND, CLIENT, or OTHER."], ["user", "SELF"],
           ["agent", "What city and state is the person in right now?"], ["user", "Queens, NY"],
           ["agent", "What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/removal/deadline within 72 hours, 4 general immigration help."], ["user", "4 general immigration help"],
-          ["agent", "What language should staff use when calling?"], ["user", "English"],
           ["agent", "Briefly describe what happened. Do not text documents, A-numbers, Social Security numbers, or passport numbers."],
           ["user", "I received a notice and need help understanding it."],
           ["agent", "Thank you. The on-call team has been alerted. Please keep your phone available for a callback.", "complete"]
@@ -425,14 +425,14 @@
         risk: "Friend",
         summary: "Sender reports ICE at a friend's residence. Intake was saved, but staff alert delivery has not been confirmed.",
         messages: [
-          ["user", "START"], ["agent", "You have reached PallviAgent emergency immigration intake line. Reply YES to continue by text, or STOP to opt out."],
-          ["user", "YES"], ["agent", "What is your full name?"], ["user", "Test Person"],
-          ["agent", "What phone number should staff call back?"], ["user", "+1 (555) 555-0228"],
-          ["agent", "Who needs help?"], ["user", "FRIEND"], ["agent", "What city and state is the person in right now?"], ["user", "Elizabeth, NJ"],
-          ["agent", "What is happening?"], ["user", "1 ICE is here now", "urgent-failed"],
-          ["agent", "What language should staff use when calling?"], ["user", "Spanish"],
-          ["agent", "Briefly describe what happened. Do not text documents or identification numbers."], ["user", "ICE is outside my friend's home."],
-          ["agent", "Thank you. Your intake was saved, but delivery to on-call staff has not been confirmed. Please try this line again shortly. If someone is in immediate physical danger, call 911.", "failed"]
+          ["user", "START"], ["agent", "You have reached PallviAgent emergency immigration intake line. Reply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out."],
+          ["user", "YES"], ["agent", "PallviAgent: Choose your language / Elija su idioma. Reply 1 for English. Responda 2 para Español. Reply STOP to opt out."], ["user", "2"],
+          ["agent", "¿Cuál es su nombre completo?"], ["user", "Persona de Prueba"],
+          ["agent", "¿A qué número debe llamar el personal?"], ["user", "+1 (555) 555-0228"],
+          ["agent", "¿Quién necesita ayuda?"], ["user", "AMIGO"], ["agent", "¿En qué ciudad y estado se encuentra la persona ahora?"], ["user", "Elizabeth, NJ"],
+          ["agent", "¿Qué está pasando?"], ["user", "1 ICE está aquí ahora", "urgent-failed"],
+          ["agent", "Describa brevemente lo ocurrido. No envíe documentos ni números de identificación."], ["user", "ICE está afuera de la casa de mi amigo."],
+          ["agent", "Gracias. Su admisión fue guardada, pero no se confirmó la entrega al personal de guardia. Intente nuevamente en breve. Si hay peligro físico inmediato, llame al 911.", "failed"]
         ]
       }
     };
@@ -486,10 +486,10 @@
       elements.priority.textContent = scenario.priority;
       elements.priorityTitle.textContent = scenario.priorityTitle;
       elements.priorityDescription.textContent = scenario.priorityDescription;
-      elements.callback.textContent = stepIndex >= 7 ? scenario.callback : "Not collected";
-      elements.location.textContent = stepIndex >= 11 ? scenario.location : "Not collected";
-      elements.language.textContent = stepIndex >= 15 ? scenario.language : "Not collected";
-      elements.risk.textContent = stepIndex >= 9 ? scenario.risk : "Not collected";
+      elements.callback.textContent = stepIndex >= 9 ? scenario.callback : "Not collected";
+      elements.location.textContent = stepIndex >= 13 ? scenario.location : "Not collected";
+      elements.language.textContent = stepIndex >= 5 ? scenario.language : "Not collected";
+      elements.risk.textContent = stepIndex >= 11 ? scenario.risk : "Not collected";
       elements.summary.textContent = events.complete || events.failed ? scenario.summary : "Intake summary will appear after the required questions are complete.";
 
       const activity = [

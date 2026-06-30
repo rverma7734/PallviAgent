@@ -1,16 +1,53 @@
+const LANGUAGE_PROMPT = "PallviAgent: Choose your language / Elija su idioma. Reply 1 for English. Responda 2 para Español. Reply STOP to opt out.";
+
+const CLIENT_COPY = {
+  English: {
+    fullName: "What is your full name?",
+    callbackPhone: "What phone number should staff call back?",
+    personAtRisk: "Who needs help? Reply SELF, FAMILY, FRIEND, CLIENT, or OTHER.",
+    location: "What city and state is the person in right now?",
+    urgency: "What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/removal/deadline within 72 hours, 4 general immigration help.",
+    details: "Briefly describe what happened. Do not text documents, A-numbers, Social Security numbers, or passport numbers.",
+    help: "This line collects immigration intake information for staff callback. Reply STOP to opt out. If someone is in immediate physical danger, call 911.",
+    stop: "You have opted out and will not receive further texts from this intake line.",
+    completedAlready: "Your intake has already been saved for staff callback. Reply START to begin a new intake, HELP for help, or STOP to opt out.",
+    urgentPrefix: "This appears urgent, and the on-call team has been alerted. Please continue. ",
+    completed: "Thank you. The on-call team has been alerted. Please keep your phone available for a callback. If there is immediate physical danger, call 911.",
+    deliveryFailed: "Thank you. Your intake was saved, but delivery to on-call staff has not been confirmed. Please try this line again shortly. If someone is in immediate physical danger, call 911.",
+    tooLong: "That message is too long. Please resend only the basic facts in 800 characters or fewer. Do not send documents or identification numbers.",
+    rateLimited: "Too many messages were received in a short period. Please wait ten minutes and try again. If someone is in immediate physical danger, call 911."
+  },
+  Spanish: {
+    fullName: "¿Cuál es su nombre completo?",
+    callbackPhone: "¿A qué número debe llamar el personal?",
+    personAtRisk: "¿Quién necesita ayuda? Responda YO, FAMILIAR, AMIGO, CLIENTE u OTRO.",
+    location: "¿En qué ciudad y estado se encuentra la persona ahora?",
+    urgency: "¿Qué está pasando? Responda 1 ICE está aquí ahora, 2 detenido ahora, 3 audiencia/remoción/plazo dentro de 72 horas, 4 ayuda general de inmigración.",
+    details: "Describa brevemente lo ocurrido. No envíe documentos, números A, números de Seguro Social ni números de pasaporte por texto.",
+    help: "Esta línea recopila información de inmigración para que el personal le devuelva la llamada. Responda STOP para cancelar. Si alguien está en peligro físico inmediato, llame al 911.",
+    stop: "Ha cancelado los mensajes y no recibirá más textos de esta línea de admisión.",
+    completedAlready: "Su admisión ya fue guardada para que el personal le devuelva la llamada. Responda START para comenzar otra, HELP para ayuda o STOP para cancelar.",
+    urgentPrefix: "Esto parece urgente y se alertó al equipo de guardia. Continúe. ",
+    completed: "Gracias. Se alertó al equipo de guardia. Mantenga su teléfono disponible para una llamada. Si hay peligro físico inmediato, llame al 911.",
+    deliveryFailed: "Gracias. Su admisión fue guardada, pero no se confirmó la entrega al personal de guardia. Intente nuevamente en breve. Si hay peligro físico inmediato, llame al 911.",
+    tooLong: "Ese mensaje es demasiado largo. Envíe solo los datos básicos en 800 caracteres o menos. No envíe documentos ni números de identificación.",
+    rateLimited: "Se recibieron demasiados mensajes en poco tiempo. Espere diez minutos e intente nuevamente. Si hay peligro físico inmediato, llame al 911."
+  }
+};
+
 const STEPS = [
   {
     key: "consent",
     prompt: (env) =>
-      `You have reached ${env.INTAKE_ORG_NAME || "our"} emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.\n\nReply YES to continue by text, or STOP to opt out.`
+      `You have reached ${env.INTAKE_ORG_NAME || "our"} emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.\n\nReply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out.`
   },
-  { key: "fullName", maxLength: 120, prompt: () => "What is your full name?" },
-  { key: "callbackPhone", maxLength: 40, prompt: () => "What phone number should staff call back?" },
-  { key: "personAtRisk", maxLength: 40, prompt: () => "Who needs help? Reply SELF, FAMILY, FRIEND, CLIENT, or OTHER." },
-  { key: "location", maxLength: 120, prompt: () => "What city and state is the person in right now?" },
-  { key: "urgency", maxLength: 240, prompt: () => "What is happening? Reply 1 ICE is here now, 2 detained now, 3 hearing/removal/deadline within 72 hours, 4 general immigration help." },
-  { key: "language", maxLength: 80, prompt: () => "What language should staff use when calling?" },
-  { key: "details", maxLength: 800, prompt: () => "Briefly describe what happened. Do not text documents, A-numbers, Social Security numbers, or passport numbers." }
+  { key: "language", maxLength: 20, prompt: () => LANGUAGE_PROMPT },
+  { key: "fullName", maxLength: 120, prompt: (_env, intake) => localized(intake, "fullName") },
+  { key: "callbackPhone", maxLength: 40, prompt: (_env, intake) => localized(intake, "callbackPhone") },
+  { key: "personAtRisk", maxLength: 40, prompt: (_env, intake) => localized(intake, "personAtRisk") },
+  { key: "location", maxLength: 120, prompt: (_env, intake) => localized(intake, "location") },
+  { key: "urgency", maxLength: 240, prompt: (_env, intake) => localized(intake, "urgency") },
+  { key: "details", maxLength: 800, prompt: (_env, intake) => localized(intake, "details") }
 ];
 
 const POLICY_VERSION = "2026-06-29";
@@ -95,10 +132,10 @@ async function processInboundText(env, from, body) {
   const staffReply = await processStaffAcknowledgment(env, from, body);
   if (staffReply) return staffReply;
   if (body.length > MAX_INBOUND_LENGTH) {
-    return `That message is too long. Please resend only the basic facts in ${MAX_INBOUND_LENGTH} characters or fewer. Do not send documents or identification numbers.`;
+    return localized(await loadIntake(env, conversationKey(from)), "tooLong");
   }
   if (!STOP_WORDS.has(body.toUpperCase()) && await isRateLimited(env, from)) {
-    return "Too many messages were received in a short period. Please wait ten minutes and try again. If someone is in immediate physical danger, call 911.";
+    return localized(await loadIntake(env, conversationKey(from)), "rateLimited");
   }
   return processIncomingSms(env, from, body);
 }
@@ -174,6 +211,9 @@ export async function processIncomingSms(env, from, body) {
   }
 
   if (STOP_WORDS.has(normalized)) {
+    const stopReply = intake?.answers?.language
+      ? localized(intake, "stop")
+      : "You have opted out and will not receive further texts. / Ha cancelado los mensajes y no recibirá más textos.";
     if (intake) {
       redactIntake(intake);
       intake.status = "opted_out";
@@ -181,23 +221,25 @@ export async function processIncomingSms(env, from, body) {
       addAuditEvent(intake, "opted_out");
       await saveIntake(env, key, intake);
     }
-    return "You have opted out and will not receive further texts from this intake line.";
+    return stopReply;
   }
 
   if (HELP_WORDS.has(normalized)) {
-    return "This line collects immigration intake information for staff callback. Reply STOP to opt out. If someone is in immediate physical danger, call 911.";
+    return intake?.answers?.language
+      ? localized(intake, "help")
+      : "PallviAgent collects immigration intake information for staff callback. Reply STOP to opt out. / PallviAgent recopila información para que el personal le devuelva la llamada. Responda STOP para cancelar. If there is immediate physical danger, call 911. / Si hay peligro físico inmediato, llame al 911.";
   }
 
   if (!intake || ["opted_out", "closed_no_consent", "needs_staff_callback"].includes(intake.status)) {
     if (!START_WORDS.has(normalized)) {
       if (intake?.status === "needs_staff_callback") {
-        return "Your intake has already been saved for staff callback. Reply START to begin a new intake, HELP for help, or STOP to opt out.";
+        return localized(intake, "completedAlready");
       }
-      return "To begin the PallviAgent immigration intake, reply START. Reply HELP for help or STOP to opt out.";
+      return "To begin PallviAgent, reply START. / Para comenzar PallviAgent, responda START. Reply HELP for help or STOP to opt out.";
     }
     intake = createIntake(from);
     await saveIntake(env, key, intake);
-    return STEPS[0].prompt(env);
+    return STEPS[0].prompt(env, intake);
   }
 
   const step = nextStep(intake);
@@ -206,27 +248,32 @@ export async function processIncomingSms(env, from, body) {
       addAuditEvent(intake, "consent_prompted");
       intake.updatedAt = nowIso();
       await saveIntake(env, key, intake);
-      return STEPS[0].prompt(env);
+      return STEPS[0].prompt(env, intake);
     }
     if (NO_WORDS.has(normalized)) {
       intake.status = "closed_no_consent";
       intake.updatedAt = nowIso();
       addAuditEvent(intake, "consent_declined");
       await saveIntake(env, key, intake);
-      return "We cannot continue by text without consent. Please call the office directly if you need help.";
+      return "We cannot continue by text without consent. / No podemos continuar por texto sin su consentimiento.";
     }
     if (!YES_WORDS.has(normalized)) {
-      return "Reply YES to consent and continue, or STOP to opt out. Automated SMS is not legal advice and does not create an attorney-client relationship.";
+      return "Reply YES to consent and continue, or STOP to opt out. / Responda YES para dar su consentimiento y continuar, o STOP para cancelar. Automated SMS is not legal advice and does not create an attorney-client relationship.";
     }
     intake.answers.consent = "yes";
     intake.status = "open";
     addAuditEvent(intake, "consent_granted");
+  } else if (step?.key === "language") {
+    const language = parseLanguage(normalized);
+    if (!language) return LANGUAGE_PROMPT;
+    intake.answers.language = language;
+    addAuditEvent(intake, "language_selected", { language });
   } else if (step) {
     if (START_WORDS.has(normalized)) {
-      return `Your intake is already active. ${step.prompt(env)}`;
+      return `Your intake is already active. ${step.prompt(env, intake)}`;
     }
     const answer = cleanAnswer(body, step.maxLength || MAX_INBOUND_LENGTH);
-    if (!answer) return step.prompt(env);
+    if (!answer) return step.prompt(env, intake);
     intake.answers[step.key] = answer;
   }
 
@@ -242,8 +289,8 @@ export async function processIncomingSms(env, from, body) {
   const followingStep = nextStep(intake);
   if (followingStep) {
     await saveIntake(env, key, intake);
-    const prefix = urgentAlertSent ? "This appears urgent, and the on-call team has been alerted. Please continue. " : "";
-    return `${prefix}${followingStep.prompt(env)}`;
+    const prefix = urgentAlertSent ? localized(intake, "urgentPrefix") : "";
+    return `${prefix}${followingStep.prompt(env, intake)}`;
   }
 
   intake.priority = classifyPriority(intake);
@@ -253,9 +300,9 @@ export async function processIncomingSms(env, from, body) {
   await saveIntake(env, key, intake);
 
   if (finalAlertSent || intake.alert?.lastSuccessfulAt) {
-    return "Thank you. The on-call team has been alerted. Please keep your phone available for a callback. If there is immediate physical danger, call 911.";
+    return localized(intake, "completed");
   }
-  return "Thank you. Your intake was saved, but delivery to on-call staff has not been confirmed. Please try this line again shortly. If someone is in immediate physical danger, call 911.";
+  return localized(intake, "deliveryFailed");
 }
 
 function createIntake(phone) {
@@ -277,6 +324,17 @@ function createIntake(phone) {
 
 function nextStep(intake) {
   return STEPS.find((step) => !(step.key in intake.answers));
+}
+
+function parseLanguage(value) {
+  if (["1", "ENGLISH", "EN"].includes(value)) return "English";
+  if (["2", "SPANISH", "ESPAÑOL", "ESPANOL", "ES"].includes(value)) return "Spanish";
+  return null;
+}
+
+function localized(intake, key) {
+  const language = intake?.answers?.language === "Spanish" ? "Spanish" : "English";
+  return CLIENT_COPY[language][key];
 }
 
 function classifyPriority(intake) {
@@ -839,7 +897,7 @@ const SMS_OPT_IN_HTML = `<!doctype html>
 <h1>Emergency immigration intake by SMS</h1>
 <p>Use this line to provide basic information for a staff callback. Automated messages do not provide legal advice or create an attorney-client relationship.</p>
 <h2>How to opt in</h2>
-<ol><li>Review the disclosures on this page.</li><li>Text <strong>START</strong> to <strong>+1 (516) 871-4383</strong>.</li><li>Reply <strong>YES</strong> to the PallviAgent consent prompt before intake questions begin.</li></ol>
+<ol><li>Review the disclosures on this page.</li><li>Text <strong>START</strong> to <strong>+1 (516) 871-4383</strong>.</li><li>Reply <strong>YES</strong> to the PallviAgent consent prompt.</li><li>Choose <strong>1 for English</strong> or <strong>2 para Español</strong> before the intake questions begin.</li></ol>
 <h2>SMS disclosures</h2>
 <p>By texting START and then replying YES, you agree to receive conversational SMS messages from PallviAgent about your immigration intake or emergency callback request.</p>
 <ul><li>Message frequency varies during an active intake.</li><li>Message and data rates may apply.</li><li>Reply <strong>STOP</strong> to opt out.</li><li>Reply <strong>HELP</strong> for help.</li><li>Consent is not a condition of purchasing goods or services.</li></ul>
