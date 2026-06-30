@@ -45,6 +45,8 @@ PUBLIC_BASE_URL=https://pallviagent.rohitverma7734.workers.dev
 VALIDATE_TWILIO_SIGNATURE=true
 VALIDATE_TELNYX_SIGNATURE=true
 STAFF_ALERT_PROVIDER=twilio
+STAFF_ACK_ENABLED=false
+STAFF_ACK_TIMEOUT_MINUTES=15
 GEMINI_MODEL=gemini-2.0-flash
 DATA_RETENTION_DAYS=30
 ```
@@ -56,6 +58,7 @@ TWILIO_ACCOUNT_SID
 TWILIO_AUTH_TOKEN
 TWILIO_PHONE_NUMBER
 STAFF_ALERT_PHONE
+STAFF_BACKUP_PHONE
 TELNYX_API_KEY
 TELNYX_PUBLIC_KEY
 TELNYX_PHONE_NUMBER
@@ -70,6 +73,7 @@ GEMINI_API_KEY
 - A sender must text `START` and then `YES` before intake questions begin.
 - P0/P1 answers trigger an immediate minimized staff alert; completion triggers a final handoff alert.
 - Failed staff alerts are retried every five minutes, up to three total attempts.
+- Optional staff acknowledgment accepts `ACK <case-code>` only from the configured primary or backup staff numbers. Overdue P0/P1 alerts can escalate to the backup number.
 - Telnyx inbound events are acknowledged immediately, deduplicated for 24 hours, and processed from a retryable job record.
 - Incomplete intake state expires after seven days. Completed intake state defaults to 30 days. Minimal declined-consent and opt-out audit records expire after 90 days.
 - The automated flow never asks for documents, A-numbers, Social Security numbers, or passport numbers.
@@ -128,3 +132,7 @@ The existing GitHub Pages URLs remain valid for A2P registration:
 
 - `https://rverma7734.github.io/PallviAgent/privacy-policy.html`
 - `https://rverma7734.github.io/PallviAgent/terms.html`
+
+## Staff Acknowledgment Rollout
+
+Leave `STAFF_ACK_ENABLED=false` until both staff destinations have received a real test alert. Then configure distinct E.164 numbers for `STAFF_ALERT_PHONE` and `STAFF_BACKUP_PHONE`, choose a timeout from 1 to 120 minutes, and enable the flag. See `OPERATIONS.md` for the test and on-call procedure.
