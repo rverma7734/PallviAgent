@@ -37,7 +37,8 @@ export default {
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(Promise.all([
       retryPendingAlerts(env),
-      retryPendingTelnyxJobs(env)
+      retryPendingTelnyxJobs(env),
+      escalateUnacknowledgedAlerts(env)
     ]));
   }
 };
@@ -74,16 +75,8 @@ export async function handleRequest(request, env, ctx) {
       return twiml("");
     }
 
-    if (body.length > MAX_INBOUND_LENGTH) {
-      return twiml(`That message is too long. Please resend only the basic facts in ${MAX_INBOUND_LENGTH} characters or fewer. Do not send documents or identification numbers.`);
-    }
-
-    if (!STOP_WORDS.has(body.toUpperCase()) && await isRateLimited(env, from)) {
-      return twiml("Too many messages were received in a short period. Please wait ten minutes and try again. If someone is in immediate physical danger, call 911.");
-    }
-
     try {
-      const reply = await processIncomingSms(env, from, body);
+      const reply = await processInboundText(env, from, body);
       return twiml(reply);
     } catch (error) {
       console.error("SMS intake processing failed", error instanceof Error ? error.message : "unknown error");
@@ -96,6 +89,18 @@ export async function handleRequest(request, env, ctx) {
   }
 
   return json({ error: "not found" }, 404);
+}
+
+async function processInboundText(env, from, body) {
+  const staffReply = await processStaffAcknowledgment(env, from, body);
+  if (staffReply) return staffReply;
+  if (body.length > MAX_INBOUND_LENGTH) {
+    return `That message is too long. Please resend only the basic facts in ${MAX_INBOUND_LENGTH} characters or fewer. Do not send documents or identification numbers.`;
+  }
+  if (!STOP_WORDS.has(body.toUpperCase()) && await isRateLimited(env, from)) {
+    return "Too many messages were received in a short period. Please wait ten minutes and try again. If someone is in immediate physical danger, call 911.";
+  }
+  return processIncomingSms(env, from, body);
 }
 
 async function handleTelnyxWebhook(request, env, ctx) {
@@ -285,32 +290,38 @@ function classifyPriority(intake) {
   return "P2";
 }
 
-async function notifyStaff(env, intake, kind) {
+async function notifyStaff(env, intake, kind, targetPhone = env.STAFF_ALERT_PHONE) {
   if (typeof env.STAFF_NOTIFIER === "function") {
-    return env.STAFF_NOTIFIER(intake, kind);
+    return env.STAFF_NOTIFIER(intake, kind, targetPhone);
   }
   const body = [
-    `${kind === "urgent" ? "URGENT" : "New"} PallviAgent intake ${intake.id.slice(0, 8)} - ${intake.priority}`,
+    `${kind === "escalation" ? "ESCALATED" : kind === "urgent" ? "URGENT" : "New"} PallviAgent intake - ${intake.priority}`,
+    `Case: ${caseToken(intake)}`,
     `Location: ${intake.answers.location || "N/A"}`,
     `Language: ${intake.answers.language || "N/A"}`,
     `Callback: ${intake.answers.callbackPhone || intake.phone}`,
-    kind === "urgent" ? "Initial alert; intake may still be in progress." : "Intake complete; call the listed callback number."
-  ].join("\n");
+    kind === "urgent"
+      ? "Initial alert; intake may still be in progress."
+      : kind === "escalation"
+        ? "Primary on-call acknowledgment is overdue."
+        : "Intake complete; call the listed callback number.",
+    isStaffAckEnabled(env) ? `Reply ACK ${caseToken(intake)}` : ""
+  ].filter(Boolean).join("\n");
 
   const provider = String(env.STAFF_ALERT_PROVIDER || "twilio").toLowerCase();
   if (provider === "telnyx") {
-    if (!env.STAFF_ALERT_PHONE || !env.TELNYX_PHONE_NUMBER) {
+    if (!targetPhone || !env.TELNYX_PHONE_NUMBER) {
       console.error("Telnyx staff alert unavailable: missing notification configuration");
       return { ok: false, code: "configuration_missing" };
     }
     return sendTelnyxMessage(env, {
       from: env.TELNYX_PHONE_NUMBER,
-      to: env.STAFF_ALERT_PHONE,
+      to: targetPhone,
       text: body
     });
   }
 
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_PHONE_NUMBER || !env.STAFF_ALERT_PHONE) {
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_PHONE_NUMBER || !targetPhone) {
     console.error("Twilio staff alert unavailable: missing notification configuration");
     return { ok: false, code: "configuration_missing" };
   }
@@ -318,7 +329,7 @@ async function notifyStaff(env, intake, kind) {
   const credentials = btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
   const params = new URLSearchParams({
     From: env.TWILIO_PHONE_NUMBER,
-    To: env.STAFF_ALERT_PHONE,
+    To: targetPhone,
     Body: body
   });
 
@@ -376,7 +387,7 @@ async function attemptStaffAlert(env, intake, kind) {
   }
 
   if (result.ok) {
-    intake.alert.status = "sent";
+    intake.alert.status = intake.alert.acknowledgedAt ? "acknowledged" : "sent";
     intake.alert.lastSuccessfulAt = nowIso();
     intake.alert.pendingKind = null;
     intake.alert.lastErrorCode = null;
@@ -413,6 +424,75 @@ export async function retryPendingAlerts(env) {
   return { checked, retried };
 }
 
+async function processStaffAcknowledgment(env, from, body) {
+  if (!isStaffAckEnabled(env)) return null;
+  const match = String(body || "").trim().match(/^ACK\s+([A-Z0-9]{8})$/i);
+  if (!match || !isAuthorizedStaffPhone(env, from)) return null;
+
+  const token = match[1].toUpperCase();
+  const conversationKeyValue = await env.INTAKE_KV.get(caseLookupKey(token));
+  if (!conversationKeyValue) {
+    return `PallviAgent: case ${token} was not found or has expired.`;
+  }
+  const intake = await loadIntake(env, conversationKeyValue);
+  if (!intake?.alert) {
+    return `PallviAgent: case ${token} does not have an active staff alert.`;
+  }
+  if (intake.alert.acknowledgedAt) {
+    return `PallviAgent: case ${token} was already acknowledged.`;
+  }
+
+  intake.alert.acknowledgedAt = nowIso();
+  intake.alert.acknowledgedBy = staffRole(env, from);
+  intake.alert.status = "acknowledged";
+  addAuditEvent(intake, "staff_alert_acknowledged", { caseId: token, staffRole: intake.alert.acknowledgedBy });
+  intake.updatedAt = nowIso();
+  await saveIntake(env, conversationKeyValue, intake);
+  return `PallviAgent: case ${token} acknowledged. Please call ${intake.answers.callbackPhone || intake.phone}.`;
+}
+
+export async function escalateUnacknowledgedAlerts(env) {
+  if (!isStaffAckEnabled(env) || !normalizePhone(env.STAFF_BACKUP_PHONE) || !env.INTAKE_KV?.list) {
+    return { checked: 0, escalated: 0 };
+  }
+  const primary = normalizePhone(env.STAFF_ALERT_PHONE);
+  const backup = normalizePhone(env.STAFF_BACKUP_PHONE);
+  if (!primary || primary === backup) return { checked: 0, escalated: 0 };
+
+  const timeoutMinutes = clampNumber(env.STAFF_ACK_TIMEOUT_MINUTES, 1, 120, 15);
+  const cutoff = Date.now() - timeoutMinutes * 60 * 1000;
+  const page = await env.INTAKE_KV.list({ prefix: "conversation:", limit: 100 });
+  let escalated = 0;
+  for (const item of page.keys || []) {
+    const intake = await loadIntake(env, item.name);
+    const alert = intake?.alert;
+    if (!intake || !["P0", "P1"].includes(intake.priority) || !alert?.lastSuccessfulAt) continue;
+    if (alert.acknowledgedAt || alert.escalationSentAt || (alert.escalationAttempts || 0) >= 3) continue;
+    const alertTime = Date.parse(alert.lastSuccessfulAt);
+    if (!Number.isFinite(alertTime) || alertTime > cutoff) continue;
+
+    alert.escalationAttempts = (alert.escalationAttempts || 0) + 1;
+    let result;
+    try {
+      result = await notifyStaff(env, intake, "escalation", backup);
+    } catch (error) {
+      console.error("Staff escalation request failed", error instanceof Error ? error.message : "unknown error");
+      result = { ok: false, code: "request_failed" };
+    }
+    if (result.ok) {
+      alert.escalationSentAt = nowIso();
+      alert.escalationLastErrorCode = null;
+      addAuditEvent(intake, "staff_alert_escalated", { caseId: caseToken(intake) });
+      escalated += 1;
+    } else {
+      alert.escalationLastErrorCode = result.code || "unknown";
+    }
+    intake.updatedAt = nowIso();
+    await saveIntake(env, item.name, intake);
+  }
+  return { checked: (page.keys || []).length, escalated };
+}
+
 async function processTelnyxJob(env, jobKey) {
   const job = await loadJson(env, jobKey);
   if (!job || job.attempts >= 3) return false;
@@ -422,12 +502,8 @@ async function processTelnyxJob(env, jobKey) {
       job.reply = "PallviAgent cannot accept MMS attachments. Please resend only basic facts by text. Do not send documents or identification numbers.";
     } else if (!job.body) {
       job.reply = "Reply START to begin the PallviAgent immigration intake, HELP for help, or STOP to opt out.";
-    } else if (job.body.length > MAX_INBOUND_LENGTH) {
-      job.reply = `That message is too long. Please resend only the basic facts in ${MAX_INBOUND_LENGTH} characters or fewer. Do not send documents or identification numbers.`;
-    } else if (!STOP_WORDS.has(job.body.toUpperCase()) && await isRateLimited(env, job.from)) {
-      job.reply = "Too many messages were received in a short period. Please wait ten minutes and try again. If someone is in immediate physical danger, call 911.";
     } else {
-      job.reply = await processIncomingSms(env, job.from, job.body);
+      job.reply = await processInboundText(env, job.from, job.body);
     }
     job.updatedAt = nowIso();
     await saveTelnyxJob(env, jobKey, job);
@@ -591,10 +667,35 @@ async function saveIntake(env, key, intake) {
       ? clampNumber(env.DATA_RETENTION_DAYS, 1, 90, 30)
       : 7;
   await env.INTAKE_KV.put(key, JSON.stringify(intake), { expirationTtl: 60 * 60 * 24 * days });
+  if (intake.id) {
+    await env.INTAKE_KV.put(caseLookupKey(caseToken(intake)), key, { expirationTtl: 60 * 60 * 24 * days });
+  }
 }
 
 function conversationKey(phone) {
   return `conversation:${phone}`;
+}
+
+function caseToken(intake) {
+  return String(intake.id || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase();
+}
+
+function caseLookupKey(token) {
+  return `case:${String(token || "").toUpperCase()}`;
+}
+
+function isStaffAckEnabled(env) {
+  return String(env.STAFF_ACK_ENABLED || "").toLowerCase() === "true";
+}
+
+function isAuthorizedStaffPhone(env, phone) {
+  const normalized = normalizePhone(phone);
+  return normalized && [env.STAFF_ALERT_PHONE, env.STAFF_BACKUP_PHONE]
+    .some((value) => normalizePhone(value) === normalized);
+}
+
+function staffRole(env, phone) {
+  return normalizePhone(phone) === normalizePhone(env.STAFF_BACKUP_PHONE) ? "backup" : "primary";
 }
 
 function telnyxEventKey(id) {

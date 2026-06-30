@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { createHmac, webcrypto } from "node:crypto";
 import test from "node:test";
-import { handleRequest, processIncomingSms, retryPendingAlerts, retryPendingTelnyxJobs } from "../src/index.mjs";
+import {
+  escalateUnacknowledgedAlerts,
+  handleRequest,
+  processIncomingSms,
+  retryPendingAlerts,
+  retryPendingTelnyxJobs
+} from "../src/index.mjs";
 
 function env(options = {}) {
   const store = new Map();
@@ -367,4 +373,103 @@ test("staff alerts can be sent through Telnyx", async () => {
   assert.equal(alerts[0].to, "+15555550999");
   assert.match(alerts[0].text, /URGENT PallviAgent intake/);
   assert.match(alerts[1].text, /Intake complete/);
+});
+
+test("authorized staff can acknowledge an urgent case by SMS", async () => {
+  const testEnv = env({ staffNotifier: async () => ({ ok: true }) });
+  testEnv.STAFF_ACK_ENABLED = "true";
+  testEnv.STAFF_ALERT_PHONE = "+15555550999";
+  const clientPhone = "+15555550133";
+  const urgentMessages = [
+    "START", "YES", "Test Person", clientPhone, "FAMILY", "Newark NJ", "2 detained now"
+  ];
+  for (const message of urgentMessages) await processIncomingSms(testEnv, clientPhone, message);
+
+  const before = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${clientPhone}`));
+  const token = before.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase();
+  const response = await handleRequest(new Request("https://example.com/sms", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ From: testEnv.STAFF_ALERT_PHONE, Body: `ACK ${token}` })
+  }), testEnv);
+  assert.match(await response.text(), new RegExp(`case ${token} acknowledged`));
+
+  const acknowledged = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${clientPhone}`));
+  assert.equal(acknowledged.alert.status, "acknowledged");
+  assert.equal(acknowledged.alert.acknowledgedBy, "primary");
+  assert.ok(acknowledged.audit.some(({ type }) => type === "staff_alert_acknowledged"));
+
+  await processIncomingSms(testEnv, clientPhone, "Spanish");
+  await processIncomingSms(testEnv, clientPhone, "ICE detained a family member tonight.");
+  const completed = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${clientPhone}`));
+  assert.equal(completed.alert.status, "acknowledged");
+});
+
+test("unacknowledged urgent cases escalate once to the backup number", async () => {
+  const notifications = [];
+  const testEnv = env({
+    staffNotifier: async (_intake, kind, targetPhone) => {
+      notifications.push({ kind, targetPhone });
+      return { ok: true };
+    }
+  });
+  testEnv.STAFF_ACK_ENABLED = "true";
+  testEnv.STAFF_ACK_TIMEOUT_MINUTES = "15";
+  testEnv.STAFF_ALERT_PHONE = "+15555550999";
+  testEnv.STAFF_BACKUP_PHONE = "+15555550888";
+  const clientPhone = "+15555550134";
+  const urgentMessages = [
+    "START", "YES", "Test Person", clientPhone, "SELF", "Boston MA", "1 ICE is here now"
+  ];
+  for (const message of urgentMessages) await processIncomingSms(testEnv, clientPhone, message);
+
+  const key = `conversation:${clientPhone}`;
+  const intake = JSON.parse(await testEnv.INTAKE_KV.get(key));
+  intake.alert.lastSuccessfulAt = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+  await testEnv.INTAKE_KV.put(key, JSON.stringify(intake));
+
+  const first = await escalateUnacknowledgedAlerts(testEnv);
+  const second = await escalateUnacknowledgedAlerts(testEnv);
+  assert.equal(first.escalated, 1);
+  assert.equal(second.escalated, 0);
+  assert.deepEqual(notifications.map(({ kind, targetPhone }) => ({ kind, targetPhone })), [
+    { kind: "urgent", targetPhone: testEnv.STAFF_ALERT_PHONE },
+    { kind: "escalation", targetPhone: testEnv.STAFF_BACKUP_PHONE }
+  ]);
+  const saved = JSON.parse(await testEnv.INTAKE_KV.get(key));
+  assert.ok(saved.alert.escalationSentAt);
+  assert.ok(saved.audit.some(({ type }) => type === "staff_alert_escalated"));
+});
+
+test("acknowledged urgent cases do not escalate", async () => {
+  const notifications = [];
+  const testEnv = env({
+    staffNotifier: async (_intake, kind, targetPhone) => {
+      notifications.push({ kind, targetPhone });
+      return { ok: true };
+    }
+  });
+  testEnv.STAFF_ACK_ENABLED = "true";
+  testEnv.STAFF_ALERT_PHONE = "+15555550999";
+  testEnv.STAFF_BACKUP_PHONE = "+15555550888";
+  const clientPhone = "+15555550135";
+  const urgentMessages = [
+    "START", "YES", "Test Person", clientPhone, "SELF", "Boston MA", "2 detained now"
+  ];
+  for (const message of urgentMessages) await processIncomingSms(testEnv, clientPhone, message);
+  const key = `conversation:${clientPhone}`;
+  const intake = JSON.parse(await testEnv.INTAKE_KV.get(key));
+  const token = intake.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase();
+  await handleRequest(new Request("https://example.com/sms", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ From: testEnv.STAFF_ALERT_PHONE, Body: `ACK ${token}` })
+  }), testEnv);
+  const acknowledged = JSON.parse(await testEnv.INTAKE_KV.get(key));
+  acknowledged.alert.lastSuccessfulAt = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  await testEnv.INTAKE_KV.put(key, JSON.stringify(acknowledged));
+
+  const result = await escalateUnacknowledgedAlerts(testEnv);
+  assert.equal(result.escalated, 0);
+  assert.equal(notifications.filter(({ kind }) => kind === "escalation").length, 0);
 });

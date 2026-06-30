@@ -41,6 +41,8 @@ The conversation collects:
 
 The production Worker requires `START` followed by `YES`, alerts staff as soon as a P0/P1 urgency answer is received, sends a minimized final handoff, and retries failed staff alerts. It intentionally does not request documents or government identification numbers over SMS.
 
+Optional on-call acknowledgment adds a short case code to staff alerts. Authorized staff can reply `ACK <case-code>`; unacknowledged P0/P1 alerts can escalate to a separately configured backup number after a bounded timeout. This remains disabled by default.
+
 Completed intakes are classified:
 
 - `P0` - ICE present now, detained now, or equivalent emergency
