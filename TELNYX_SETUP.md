@@ -52,7 +52,7 @@ PallviAgent uses conversational SMS for inbound immigration intake and staff cal
 ### Message flow / call to action
 
 ```text
-End users opt in through the publicly accessible page at [TELNYX_OPT_IN_URL]. The page displays the PallviAgent program name, the SMS number [TELNYX_NUMBER], and instructions to text START. It discloses that messages concern immigration intake and emergency callback coordination, message frequency varies, message and data rates may apply, consent is not a condition of purchase, and users may reply STOP to opt out or HELP for help. It links directly to the Privacy Policy and SMS Terms. After the user texts START, PallviAgent identifies itself, states that automated SMS is not legal advice and does not create an attorney-client relationship, and asks the user to reply YES. The user must reply YES before any intake questions are sent. This public webpage-to-keyword flow is the only opt-in method used for this campaign.
+End users opt in through the publicly accessible page at [TELNYX_OPT_IN_URL]. The page displays the PallviAgent program name, the SMS number [TELNYX_NUMBER], and instructions to text START. It discloses that messages concern immigration intake and emergency callback coordination, message frequency varies, message and data rates may apply, consent is not a condition of purchase, and users may reply STOP to opt out or HELP for help. It links directly to the Privacy Policy and SMS Terms. After the user texts START, PallviAgent identifies itself, states that automated SMS is not legal advice and does not create an attorney-client relationship, and asks the user to reply YES. The user must reply YES before any intake questions are sent. After consent, the system asks the user to reply 1 for English or 2 for Spanish and sends the remaining intake questions in that language. This public webpage-to-keyword flow is the only opt-in method used for this campaign.
 ```
 
 Replace both bracketed values and verify the Telnyx opt-in page anonymously before final campaign submission.
@@ -60,7 +60,7 @@ Replace both bracketed values and verify the Telnyx opt-in page anonymously befo
 ### Sample messages
 
 ```text
-PallviAgent: You have reached our immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. Reply YES to continue or STOP to opt out.
+PallviAgent: You have reached our immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. Reply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out.
 ```
 
 ```text

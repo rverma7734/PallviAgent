@@ -69,7 +69,8 @@ test("emergency flow classifies detention as P0", async () => {
 
   assert.match(await processIncomingSms(testEnv, phone, "hello"), /reply START/i);
   assert.match(await processIncomingSms(testEnv, phone, "START"), /Reply YES/);
-  assert.equal(await processIncomingSms(testEnv, phone, "YES"), "What is your full name?");
+  assert.match(await processIncomingSms(testEnv, phone, "YES"), /Choose your language/);
+  assert.equal(await processIncomingSms(testEnv, phone, "1"), "What is your full name?");
 
   const answers = [
     "Maria Lopez",
@@ -77,7 +78,6 @@ test("emergency flow classifies detention as P0", async () => {
     "FAMILY",
     "Newark NJ",
     "2 detained now",
-    "Spanish",
     "ICE detained my husband tonight after a traffic stop."
   ];
 
@@ -92,8 +92,43 @@ test("emergency flow classifies detention as P0", async () => {
   assert.equal(saved.status, "needs_staff_callback");
   assert.deepEqual(notifications.map(({ kind }) => kind), ["urgent", "complete"]);
   assert.ok(saved.audit.some(({ type }) => type === "consent_granted"));
+  assert.ok(saved.audit.some(({ type, language }) => type === "language_selected" && language === "English"));
   assert.ok(saved.audit.some(({ type }) => type === "staff_alert_sent"));
   assert.equal("aNumber" in saved.answers, false);
+});
+
+test("Spanish selection localizes the intake and is recorded in the audit", async () => {
+  const notifications = [];
+  const testEnv = env({
+    staffNotifier: async (intake, kind) => {
+      notifications.push({ kind, language: intake.answers.language });
+      return { ok: true };
+    }
+  });
+  const phone = "+15555550136";
+
+  await processIncomingSms(testEnv, phone, "START");
+  assert.match(await processIncomingSms(testEnv, phone, "YES"), /Elija su idioma/);
+  assert.match(await processIncomingSms(testEnv, phone, "not-a-language"), /Responda 2 para Español/);
+  assert.equal(await processIncomingSms(testEnv, phone, "2"), "¿Cuál es su nombre completo?");
+
+  const answers = [
+    "María López",
+    "+1 555 555 0136",
+    "FAMILIAR",
+    "Newark NJ",
+    "2 detenido ahora",
+    "ICE detuvo a mi esposo esta noche."
+  ];
+  let reply = "";
+  for (const answer of answers) reply = await processIncomingSms(testEnv, phone, answer);
+
+  assert.match(reply, /equipo de guardia/);
+  const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
+  assert.equal(saved.answers.language, "Spanish");
+  assert.equal(saved.priority, "P0");
+  assert.deepEqual(notifications.map(({ kind }) => kind), ["urgent", "complete"]);
+  assert.ok(saved.audit.some(({ type, language }) => type === "language_selected" && language === "Spanish"));
 });
 
 test("STOP redacts intake data but preserves a minimal audit trail", async () => {
@@ -102,6 +137,7 @@ test("STOP redacts intake data but preserves a minimal audit trail", async () =>
 
   await processIncomingSms(testEnv, phone, "START");
   await processIncomingSms(testEnv, phone, "YES");
+  await processIncomingSms(testEnv, phone, "1");
   await processIncomingSms(testEnv, phone, "Sensitive Name");
 
   const reply = await processIncomingSms(testEnv, phone, "STOP");
@@ -150,6 +186,8 @@ test("public SMS opt-in page includes required disclosures", async () => {
   assert.match(body, /Message and data rates may apply/);
   assert.match(body, /Reply <strong>STOP<\/strong>/);
   assert.match(body, /Reply <strong>HELP<\/strong>/);
+  assert.match(body, /1 for English/);
+  assert.match(body, /2 para Español/);
   assert.match(body, /privacy-policy\.html/);
   assert.match(body, /terms\.html/);
 });
@@ -164,8 +202,8 @@ test("failed staff alerts are retried and do not claim confirmed delivery", asyn
   });
   const phone = "+15555550127";
   const messages = [
-    "START", "YES", "Jordan Lee", "+15555550127", "SELF", "Boston MA",
-    "4 general immigration help", "English", "Need help understanding a notice."
+    "START", "YES", "1", "Jordan Lee", "+15555550127", "SELF", "Boston MA",
+    "4 general immigration help", "Need help understanding a notice."
   ];
 
   let reply;
@@ -364,8 +402,8 @@ test("staff alerts can be sent through Telnyx", async () => {
   testEnv.STAFF_ALERT_PHONE = "+15555550999";
   const phone = "+15555550132";
   const messages = [
-    "START", "YES", "Test Person", "+15555550132", "FAMILY", "Newark NJ",
-    "2 detained now", "Spanish", "ICE detained a family member tonight."
+    "START", "YES", "1", "Test Person", "+15555550132", "FAMILY", "Newark NJ",
+    "2 detained now", "ICE detained a family member tonight."
   ];
   for (const message of messages) await processIncomingSms(testEnv, phone, message);
 
@@ -381,7 +419,7 @@ test("authorized staff can acknowledge an urgent case by SMS", async () => {
   testEnv.STAFF_ALERT_PHONE = "+15555550999";
   const clientPhone = "+15555550133";
   const urgentMessages = [
-    "START", "YES", "Test Person", clientPhone, "FAMILY", "Newark NJ", "2 detained now"
+    "START", "YES", "1", "Test Person", clientPhone, "FAMILY", "Newark NJ", "2 detained now"
   ];
   for (const message of urgentMessages) await processIncomingSms(testEnv, clientPhone, message);
 
@@ -399,7 +437,6 @@ test("authorized staff can acknowledge an urgent case by SMS", async () => {
   assert.equal(acknowledged.alert.acknowledgedBy, "primary");
   assert.ok(acknowledged.audit.some(({ type }) => type === "staff_alert_acknowledged"));
 
-  await processIncomingSms(testEnv, clientPhone, "Spanish");
   await processIncomingSms(testEnv, clientPhone, "ICE detained a family member tonight.");
   const completed = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${clientPhone}`));
   assert.equal(completed.alert.status, "acknowledged");
@@ -419,7 +456,7 @@ test("unacknowledged urgent cases escalate once to the backup number", async () 
   testEnv.STAFF_BACKUP_PHONE = "+15555550888";
   const clientPhone = "+15555550134";
   const urgentMessages = [
-    "START", "YES", "Test Person", clientPhone, "SELF", "Boston MA", "1 ICE is here now"
+    "START", "YES", "1", "Test Person", clientPhone, "SELF", "Boston MA", "1 ICE is here now"
   ];
   for (const message of urgentMessages) await processIncomingSms(testEnv, clientPhone, message);
 
@@ -454,7 +491,7 @@ test("acknowledged urgent cases do not escalate", async () => {
   testEnv.STAFF_BACKUP_PHONE = "+15555550888";
   const clientPhone = "+15555550135";
   const urgentMessages = [
-    "START", "YES", "Test Person", clientPhone, "SELF", "Boston MA", "2 detained now"
+    "START", "YES", "1", "Test Person", clientPhone, "SELF", "Boston MA", "2 detained now"
   ];
   for (const message of urgentMessages) await processIncomingSms(testEnv, clientPhone, message);
   const key = `conversation:${clientPhone}`;

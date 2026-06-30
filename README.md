@@ -31,15 +31,15 @@ python3 -m venv .venv
 The conversation collects:
 
 - Consent to continue by SMS
+- Language selection: `1` for English or `2` for Spanish
 - Full name
 - Callback phone
 - Whether the caller, family, friend, client, or another person needs help
 - Current city/state
 - Urgency category
-- Preferred callback language
 - Brief facts
 
-The production Worker requires `START` followed by `YES`, alerts staff as soon as a P0/P1 urgency answer is received, sends a minimized final handoff, and retries failed staff alerts. It intentionally does not request documents or government identification numbers over SMS.
+The production Worker requires `START` followed by `YES`, asks the user to choose English or Spanish, and localizes the remaining intake. It alerts staff as soon as a P0/P1 urgency answer is received, sends a minimized final handoff, and retries failed staff alerts. It intentionally does not request documents or government identification numbers over SMS.
 
 Optional on-call acknowledgment adds a short case code to staff alerts. Authorized staff can reply `ACK <case-code>`; unacknowledged P0/P1 alerts can escalate to a separately configured backup number after a bounded timeout. This remains disabled by default.
 
