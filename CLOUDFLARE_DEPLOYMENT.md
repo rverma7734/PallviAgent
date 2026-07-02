@@ -7,7 +7,6 @@ Cloudflare Workers is the preferred low-cost deployment path for this project. I
 The `worker/` directory contains a Cloudflare Worker version of the intake system:
 
 - `POST /sms` for Twilio incoming SMS webhooks.
-- `POST /telnyx/sms` for Telnyx API v2 messaging webhooks.
 - `GET /health` for smoke tests.
 - `GET /privacy-policy.html` and `GET /terms.html` as backup policy URLs.
 - Cloudflare KV storage for conversation state.
@@ -43,8 +42,6 @@ Variables:
 INTAKE_ORG_NAME=PallviAgent
 PUBLIC_BASE_URL=https://pallviagent.rohitverma7734.workers.dev
 VALIDATE_TWILIO_SIGNATURE=true
-VALIDATE_TELNYX_SIGNATURE=true
-STAFF_ALERT_PROVIDER=twilio
 STAFF_ACK_ENABLED=false
 STAFF_ACK_TIMEOUT_MINUTES=15
 GEMINI_MODEL=gemini-2.0-flash
@@ -59,22 +56,20 @@ TWILIO_AUTH_TOKEN
 TWILIO_PHONE_NUMBER
 STAFF_ALERT_PHONE
 STAFF_BACKUP_PHONE
-TELNYX_API_KEY
-TELNYX_PUBLIC_KEY
-TELNYX_PHONE_NUMBER
 STAFF_ALERT_EMAIL
 GEMINI_API_KEY
 ```
 
-`GEMINI_API_KEY` and `STAFF_ALERT_EMAIL` are optional in the Worker version. Keep `STAFF_ALERT_PROVIDER=twilio` until Telnyx is configured and tested; then it may be changed to `telnyx`. Do not launch overnight intake until the selected provider values and `STAFF_ALERT_PHONE` are configured and a real alert has been received by staff.
+`GEMINI_API_KEY` and `STAFF_ALERT_EMAIL` are optional in the Worker version. Do not launch overnight intake until the Twilio values and `STAFF_ALERT_PHONE` are configured and a real alert has been received by staff.
 
 ## Operational Behavior
 
 - A sender must text `START` and then `YES` before intake questions begin.
+- Twilio webhook retries with the same `MessageSid` reuse the original response for 24 hours and do not advance the intake twice.
+- MMS attachments are rejected; clients are instructed to resend only basic facts as text.
 - P0/P1 answers trigger an immediate minimized staff alert; completion triggers a final handoff alert.
 - Failed staff alerts are retried every five minutes, up to three total attempts.
 - Optional staff acknowledgment accepts `ACK <case-code>` only from the configured primary or backup staff numbers. Overdue P0/P1 alerts can escalate to the backup number.
-- Telnyx inbound events are acknowledged immediately, deduplicated for 24 hours, and processed from a retryable job record.
 - Incomplete intake state expires after seven days. Completed intake state defaults to 30 days. Minimal declined-consent and opt-out audit records expire after 90 days.
 - The automated flow never asks for documents, A-numbers, Social Security numbers, or passport numbers.
 
@@ -112,13 +107,9 @@ https://pallviagent.rohitverma7734.workers.dev/sms
 
 Method: `POST`.
 
-The Telnyx API v2 messaging profile webhook is:
+The approved 10DLC number must be in the Sender Pool of the Messaging Service associated with the approved campaign. In the Messaging Service's **Integration** settings, either keep **Defer to sender's webhook** and configure the number itself with the URL above, or select the common webhook option and set the same URL there. Do not configure both paths to invoke different applications.
 
-```text
-https://pallviagent.rohitverma7734.workers.dev/telnyx/sms
-```
-
-Method: `POST`. Keep webhook signature validation enabled and copy the account public key from Telnyx Keys & Credentials into `TELNYX_PUBLIC_KEY`.
+Before enabling the line, confirm the Worker has `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, and `STAFF_ALERT_PHONE`. Send one real `START` message and complete one fake urgent intake to verify both the client reply and staff alert.
 
 ## Smoke Tests
 
