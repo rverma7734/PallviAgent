@@ -70,7 +70,7 @@ Workers AI uses the `AI` binding in `wrangler.toml`; no additional AI API key is
 - MMS attachments are rejected; clients are instructed to resend only basic facts as text.
 - P0/P1 answers trigger one immediate compact staff alert. P2 cases send one compact alert at completion; a successful urgent alert is not duplicated at completion.
 - Deterministic rules remain authoritative. Workers AI reviews only ambiguous free-text urgency answers, receives no identity or contact fields, and may only escalate P2 to P1/P0. AI errors fall back to deterministic routing.
-- Workers AI also formats a short staff-alert summary from the relationship, urgency answer, and brief facts. Names and contact fields are excluded, output is ASCII and length-capped, and deterministic text is used if AI is unavailable.
+- Workers AI also formats a short staff-alert summary from the relationship, urgency answer, and brief facts. Names and contact fields are excluded from the model, then the alert assembler adds the submitted name, location, and formatted callback number. Output is ASCII and length-capped, and deterministic text is used if AI is unavailable.
 - Failed staff alerts are retried every five minutes, up to three total attempts.
 - Optional staff acknowledgment accepts `ACK <case-code>` only from the configured primary or backup staff numbers. Overdue P0/P1 alerts can escalate to the backup number.
 - Incomplete intake state expires after seven days. Completed intake state defaults to 30 days. Minimal declined-consent and opt-out audit records expire after 90 days.
