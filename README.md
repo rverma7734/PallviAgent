@@ -40,6 +40,8 @@ The conversation collects:
 
 The production Worker requires `START` followed by `YES`, asks the user to choose English or Spanish, and localizes the remaining intake. It sends one compact alert as soon as a P0/P1 urgency answer is received, sends a compact completion alert for P2 cases, and retries failed staff alerts. It intentionally does not request documents or government identification numbers over SMS.
 
+Optional Cloudflare Workers AI triage reviews only ambiguous free-text urgency answers. It never receives identity or contact fields, cannot lower deterministic priority, and falls back cleanly when unavailable.
+
 Optional on-call acknowledgment adds a short case code to staff alerts. Authorized staff can reply `ACK <case-code>`; unacknowledged P0/P1 alerts can escalate to a separately configured backup number after a bounded timeout. This remains disabled by default.
 
 Completed intakes are classified:

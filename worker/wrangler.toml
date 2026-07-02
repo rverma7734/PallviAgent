@@ -12,8 +12,13 @@ PUBLIC_BASE_URL = "https://pallviagent.rohitverma7734.workers.dev"
 VALIDATE_TWILIO_SIGNATURE = "true"
 STAFF_ACK_ENABLED = "false"
 STAFF_ACK_TIMEOUT_MINUTES = "15"
-GEMINI_MODEL = "gemini-2.0-flash"
+AI_TRIAGE_ENABLED = "true"
+AI_MODEL = "@cf/meta/llama-3.2-3b-instruct"
+AI_TRIAGE_TIMEOUT_MS = "2500"
 DATA_RETENTION_DAYS = "30"
+
+[ai]
+binding = "AI"
 
 [triggers]
 crons = ["*/5 * * * *"]

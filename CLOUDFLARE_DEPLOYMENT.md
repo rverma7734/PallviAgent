@@ -44,7 +44,9 @@ PUBLIC_BASE_URL=https://pallviagent.rohitverma7734.workers.dev
 VALIDATE_TWILIO_SIGNATURE=true
 STAFF_ACK_ENABLED=false
 STAFF_ACK_TIMEOUT_MINUTES=15
-GEMINI_MODEL=gemini-2.0-flash
+AI_TRIAGE_ENABLED=true
+AI_MODEL=@cf/meta/llama-3.2-3b-instruct
+AI_TRIAGE_TIMEOUT_MS=2500
 DATA_RETENTION_DAYS=30
 ```
 
@@ -56,11 +58,9 @@ TWILIO_AUTH_TOKEN
 TWILIO_PHONE_NUMBER
 STAFF_ALERT_PHONE
 STAFF_BACKUP_PHONE
-STAFF_ALERT_EMAIL
-GEMINI_API_KEY
 ```
 
-`GEMINI_API_KEY` and `STAFF_ALERT_EMAIL` are optional in the Worker version. Do not launch overnight intake until the Twilio values and `STAFF_ALERT_PHONE` are configured and a real alert has been received by staff.
+Workers AI uses the `AI` binding in `wrangler.toml`; no additional AI API key is required. Do not launch overnight intake until the Twilio values and `STAFF_ALERT_PHONE` are configured and a real alert has been received by staff.
 
 ## Operational Behavior
 
@@ -68,6 +68,7 @@ GEMINI_API_KEY
 - Twilio webhook retries with the same `MessageSid` reuse the original response for 24 hours and do not advance the intake twice.
 - MMS attachments are rejected; clients are instructed to resend only basic facts as text.
 - P0/P1 answers trigger one immediate compact staff alert. P2 cases send one compact alert at completion; a successful urgent alert is not duplicated at completion.
+- Deterministic rules remain authoritative. Workers AI reviews only ambiguous free-text urgency answers, receives no identity or contact fields, and may only escalate P2 to P1/P0. AI errors fall back to deterministic routing.
 - Failed staff alerts are retried every five minutes, up to three total attempts.
 - Optional staff acknowledgment accepts `ACK <case-code>` only from the configured primary or backup staff numbers. Overdue P0/P1 alerts can escalate to the backup number.
 - Incomplete intake state expires after seven days. Completed intake state defaults to 30 days. Minimal declined-consent and opt-out audit records expire after 90 days.

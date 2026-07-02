@@ -28,6 +28,8 @@ function env(options = {}) {
   const store = new Map();
   return {
     INTAKE_ORG_NAME: "PallviAgent",
+    AI: options.ai,
+    AI_TRIAGE_ENABLED: options.aiTriageEnabled ? "true" : "false",
     VALIDATE_TWILIO_SIGNATURE: "false",
     STAFF_NOTIFIER: options.staffNotifier,
     TWILIO_MESSAGE_SENDER: options.twilioMessageSender,
@@ -129,6 +131,70 @@ test("Spanish selection localizes the intake and is recorded in the audit", asyn
   assert.ok(saved.audit.some(({ type, language }) => type === "language_selected" && language === "Spanish"));
 });
 
+test("AI triage can escalate ambiguous text without receiving identity fields", async () => {
+  const notifications = [];
+  let modelInput;
+  const testEnv = env({
+    aiTriageEnabled: true,
+    ai: {
+      async run(_model, input) {
+        modelInput = input;
+        return { response: "P0" };
+      }
+    },
+    staffNotifier: async (intake, kind) => {
+      notifications.push({ kind, priority: intake.priority });
+      return { ok: true };
+    }
+  });
+  const phone = "+15555550139";
+  const messages = [
+    "START", "YES", "2", "Nombre Privado", phone, "FAMILIAR", "Newark NJ"
+  ];
+  for (const message of messages) await processIncomingSms(testEnv, phone, message);
+  const reply = await processIncomingSms(testEnv, phone, "ICE detuvo a mi esposo esta noche");
+
+  assert.match(reply, /equipo alertado/i);
+  assert.equal(modelInput.messages[1].content, "ICE detuvo a mi esposo esta noche");
+  assert.doesNotMatch(JSON.stringify(modelInput), /Nombre Privado|15555550139|Newark/);
+  const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
+  assert.equal(saved.priority, "P0");
+  assert.deepEqual(notifications, [{ kind: "urgent", priority: "P0" }]);
+  assert.ok(saved.audit.some(({ type, from, to }) => type === "ai_triage_escalated" && from === "P2" && to === "P0"));
+});
+
+test("deterministic numbered urgency bypasses AI triage", async () => {
+  let calls = 0;
+  const testEnv = env({
+    aiTriageEnabled: true,
+    ai: { async run() { calls += 1; return { response: "P2" }; } },
+    staffNotifier: async () => ({ ok: true })
+  });
+  const phone = "+15555550140";
+  const messages = ["START", "YES", "1", "Test Person", phone, "SELF", "Boston MA", "2 detained now"];
+  for (const message of messages) await processIncomingSms(testEnv, phone, message);
+  assert.equal(calls, 0);
+});
+
+test("AI triage failure falls back to deterministic routing", async () => {
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  const testEnv = env({
+    aiTriageEnabled: true,
+    ai: { async run() { throw new Error("test failure"); } }
+  });
+  try {
+    const phone = "+15555550141";
+    const messages = ["START", "YES", "1", "Test Person", phone, "SELF", "Boston MA", "Need help with a notice"];
+    for (const message of messages) await processIncomingSms(testEnv, phone, message);
+    const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
+    assert.equal(saved.priority, "P2");
+    assert.ok(saved.audit.some(({ type }) => type === "ai_triage_failed"));
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
 test("STOP redacts intake data but preserves a minimal audit trail", async () => {
   const testEnv = env();
   const phone = "+15555550124";
@@ -226,6 +292,16 @@ test("public SMS opt-in page includes required disclosures", async () => {
   assert.match(body, /2 para Español/);
   assert.match(body, /privacy-policy\.html/);
   assert.match(body, /terms\.html/);
+});
+
+test("privacy policy discloses limited automated triage", async () => {
+  const response = await handleRequest(new Request("https://example.com/privacy-policy.html"), env());
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(body, /Automated Triage/);
+  assert.match(body, /does not receive the sender's name, phone number, callback number, or full intake/);
+  assert.match(body, /cannot lower a rule-based emergency classification/);
 });
 
 test("failed staff alerts are retried and do not claim confirmed delivery", async () => {
