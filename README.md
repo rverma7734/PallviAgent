@@ -42,7 +42,7 @@ The production Worker requires `START` followed by `YES`, asks the user to choos
 
 Optional Cloudflare Workers AI triage reviews only ambiguous free-text urgency answers. It never receives identity or contact fields, cannot lower deterministic priority, and falls back cleanly when unavailable.
 
-Workers AI also condenses non-identifying intake facts into a one-line staff SMS summary. Case codes stay hidden unless staff acknowledgment is enabled, and the complete alert remains limited to one SMS segment.
+Workers AI also condenses non-identifying intake facts into a one-line staff SMS summary. The alert assembler then adds the exact submitted name, normalized location, and formatted callback number without exposing those identity fields to the model. Case codes stay hidden unless staff acknowledgment is enabled, and the complete alert remains limited to one SMS segment.
 
 Optional on-call acknowledgment adds a short case code to staff alerts. Authorized staff can reply `ACK <case-code>`; unacknowledged P0/P1 alerts can escalate to a separately configured backup number after a bounded timeout. This remains disabled by default.
 

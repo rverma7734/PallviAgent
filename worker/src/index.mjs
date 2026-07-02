@@ -395,16 +395,19 @@ async function notifyStaff(env, intake, kind, targetPhone = env.STAFF_ALERT_PHON
   }
   const label = kind === "escalation" ? "ESCALATED" : kind === "urgent" ? "URGENT" : "NEW";
   const language = intake.answers.language === "Spanish" ? "ES" : "EN";
-  const location = compactStaffText(intake.answers.location || "N/A", 30);
+  const name = compactStaffText(intake.answers.fullName || "Name unavailable", 28);
+  const location = compactStaffText(intake.answers.location || "N/A", 24);
   const summary = await staffAlertSummary(env, intake);
   const acknowledgmentEnabled = isStaffAckEnabled(env);
-  const body = [
-    `${label} PallviAgent ${intake.priority}${acknowledgmentEnabled ? ` ${caseToken(intake)}` : ""} | ${language}`,
-    location,
-    summary,
-    `Call ${formatStaffPhone(intake.answers.callbackPhone || intake.phone)}`,
-    acknowledgmentEnabled ? `ACK ${caseToken(intake)}` : ""
-  ].filter(Boolean).join("\n");
+  const header = `${label} PallviAgent ${intake.priority}${acknowledgmentEnabled ? ` ${caseToken(intake)}` : ""} - ${language}`;
+  const identity = `${name} - ${location}`;
+  const callback = `Call ${formatStaffPhone(intake.answers.callbackPhone || intake.phone)}`;
+  const acknowledgment = acknowledgmentEnabled ? `ACK ${caseToken(intake)}` : "";
+  const fixedBody = [header, identity, callback, acknowledgment].filter(Boolean).join("\n");
+  const summaryLimit = Math.min(48, Math.max(12, 160 - fixedBody.length - 1));
+  const body = [header, identity, compactStaffSummary(summary, summaryLimit), callback, acknowledgment]
+    .filter(Boolean)
+    .join("\n");
 
   if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_PHONE_NUMBER || !targetPhone) {
     console.error("Twilio staff alert unavailable: missing notification configuration");
@@ -700,14 +703,15 @@ function compactStaffText(value, maxLength) {
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\x20-\x7e]/g, " ")
+    .replace(/[^A-Za-z0-9 .,'"/()&:+#-]/g, " ")
     .replace(/^["']+|["']+$/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLength);
 }
 
-function compactStaffSummary(value) {
-  return compactStaffText(value, 48).replace(/[.,;:!?-]+$/, "");
+function compactStaffSummary(value, maxLength = 48) {
+  return compactStaffText(value, maxLength).replace(/[.,;:!?-]+$/, "");
 }
 
 function formatStaffPhone(value) {

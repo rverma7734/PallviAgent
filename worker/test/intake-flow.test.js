@@ -422,8 +422,8 @@ test("staff alerts are sent through the configured Twilio number", async () => {
   assert.equal(alerts[0].from, "+15168714383");
   assert.equal(alerts[0].to, "+15555550999");
   assert.equal(alerts[0].body, [
-    "URGENT PallviAgent P0 | EN",
-    "Newark NJ",
+    "URGENT PallviAgent P0 - EN",
+    "Test Person - Newark NJ",
     "2 detained now",
     "Call (555) 555-0132"
   ].join("\n"));
@@ -462,8 +462,8 @@ test("AI formats a concise staff summary without receiving identity fields", asy
   assert.match(modelInput.messages[1].content, /general immigration help/);
   assert.match(modelInput.messages[1].content, /court notice/);
   assert.equal(alerts[0].body, [
-    "NEW PallviAgent P2 | EN",
-    "Queens NY",
+    "NEW PallviAgent P2 - EN",
+    "Private Name - Queens NY",
     "Client received notice and requests staff review",
     "Call (646) 204-8447"
   ].join("\n"));
@@ -504,6 +504,35 @@ test("AI summary failures use the deterministic intake text", async () => {
   } finally {
     console.error = originalConsoleError;
   }
+});
+
+test("identity and callback remain visible when the summary must shrink to one segment", async () => {
+  const alerts = [];
+  const testEnv = env({
+    aiSummaryEnabled: true,
+    ai: { async run() { return { response: "A deliberately long summary describing a routine intake request for staff review" }; } },
+    twilioMessageSender: async (message) => {
+      alerts.push(message);
+      return { ok: true };
+    }
+  });
+  testEnv.TWILIO_ACCOUNT_SID = "ACtest";
+  testEnv.TWILIO_AUTH_TOKEN = "test-token";
+  testEnv.TWILIO_PHONE_NUMBER = "+15168714383";
+  testEnv.STAFF_ALERT_PHONE = "+15555550999";
+  testEnv.STAFF_ACK_ENABLED = "true";
+  const phone = "+15555550143";
+  const messages = [
+    "START", "YES", "1", "A".repeat(60), phone, "SELF", "L".repeat(60),
+    "4 general immigration help", "Needs routine review of an immigration notice."
+  ];
+  for (const message of messages) await processIncomingSms(testEnv, phone, message);
+
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].body, new RegExp(`${"A".repeat(28)} - ${"L".repeat(24)}`));
+  assert.match(alerts[0].body, /Call \(555\) 555-0143/);
+  assert.match(alerts[0].body, /ACK [A-Z0-9]{8}/);
+  assert.equal(smsSegmentCount(alerts[0].body), 1);
 });
 
 test("authorized staff can acknowledge an urgent case by SMS", async () => {
