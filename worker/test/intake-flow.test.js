@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { createHmac, webcrypto } from "node:crypto";
+import { createHmac } from "node:crypto";
 import test from "node:test";
 import {
   escalateUnacknowledgedAlerts,
   handleRequest,
   processIncomingSms,
-  retryPendingAlerts,
-  retryPendingTelnyxJobs
+  retryPendingAlerts
 } from "../src/index.mjs";
 
 function env(options = {}) {
@@ -14,9 +13,8 @@ function env(options = {}) {
   return {
     INTAKE_ORG_NAME: "PallviAgent",
     VALIDATE_TWILIO_SIGNATURE: "false",
-    VALIDATE_TELNYX_SIGNATURE: "false",
     STAFF_NOTIFIER: options.staffNotifier,
-    TELNYX_MESSAGE_SENDER: options.telnyxMessageSender,
+    TWILIO_MESSAGE_SENDER: options.twilioMessageSender,
     _store: store,
     INTAKE_KV: {
       async get(key) {
@@ -36,25 +34,6 @@ function env(options = {}) {
       }
     }
   };
-}
-
-function telnyxEvent({ id = "event-123", text = "START" } = {}) {
-  return JSON.stringify({
-    data: {
-      event_type: "message.received",
-      id,
-      occurred_at: new Date().toISOString(),
-      payload: {
-        id: `message-${id}`,
-        from: { phone_number: "+15555550131" },
-        to: [{ phone_number: "+15168714383" }],
-        text,
-        type: "SMS",
-        media: []
-      },
-      record_type: "event"
-    }
-  });
 }
 
 test("emergency flow classifies detention as P0", async () => {
@@ -177,6 +156,44 @@ test("sms endpoint returns TwiML", async () => {
   assert.match(body, /<Response><Message>/);
 });
 
+test("sms endpoint reuses the saved reply for duplicate Twilio MessageSids", async () => {
+  const testEnv = env();
+  const phone = "+15555550137";
+  const messageSid = `SM${"a".repeat(32)}`;
+  const request = () => new Request("https://example.com/sms", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ From: phone, Body: "START", MessageSid: messageSid })
+  });
+
+  const first = await handleRequest(request(), testEnv);
+  const duplicate = await handleRequest(request(), testEnv);
+  assert.equal(await duplicate.text(), await first.text());
+
+  const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
+  assert.equal(saved.status, "awaiting_consent");
+  assert.equal(saved.audit.filter(({ type }) => type === "start_received").length, 1);
+});
+
+test("sms endpoint rejects MMS attachments without creating an intake", async () => {
+  const testEnv = env();
+  const phone = "+15555550138";
+  const response = await handleRequest(new Request("https://example.com/sms", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      From: phone,
+      Body: "",
+      MessageSid: `SM${"b".repeat(32)}`,
+      NumMedia: "1",
+      MediaUrl0: "https://example.com/document.jpg"
+    })
+  }), testEnv);
+
+  assert.match(await response.text(), /cannot accept MMS attachments/);
+  assert.equal(await testEnv.INTAKE_KV.get(`conversation:${phone}`), null);
+});
+
 test("public SMS opt-in page includes required disclosures", async () => {
   const response = await handleRequest(new Request("https://example.com/sms-opt-in.html"), env());
   const body = await response.text();
@@ -237,13 +254,13 @@ test("sms endpoint validates Twilio signatures when enabled", async () => {
   testEnv.TWILIO_AUTH_TOKEN = "test-auth-token";
   testEnv.PUBLIC_BASE_URL = "https://example.com";
   const form = new URLSearchParams({ From: "+15555550129", Body: "START" });
-  const payload = `https://example.com/sms${[...form.entries()]
+  const payload = `https://example.com/sms?source=twilio${[...form.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => `${key}${value}`)
     .join("")}`;
   const signature = createHmac("sha1", testEnv.TWILIO_AUTH_TOKEN).update(payload).digest("base64");
 
-  const valid = await handleRequest(new Request("https://example.com/sms", {
+  const valid = await handleRequest(new Request("https://internal.example.com/sms?source=twilio", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -253,7 +270,7 @@ test("sms endpoint validates Twilio signatures when enabled", async () => {
   }), testEnv);
   assert.equal(valid.status, 200);
 
-  const invalid = await handleRequest(new Request("https://example.com/sms", {
+  const invalid = await handleRequest(new Request("https://internal.example.com/sms?source=twilio", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -286,119 +303,17 @@ test("sms endpoint rate limits bursts but still permits STOP", async () => {
   assert.match(await stop.text(), /opted out/);
 });
 
-test("Telnyx webhook acknowledges, replies, and deduplicates events", async () => {
-  const sent = [];
-  const pending = [];
-  const testEnv = env({
-    telnyxMessageSender: async (message) => {
-      sent.push(message);
-      return { ok: true };
-    }
-  });
-  const body = telnyxEvent();
-  const request = () => new Request("https://example.com/telnyx/sms", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body
-  });
-  const ctx = { waitUntil(promise) { pending.push(promise); } };
-
-  const response = await handleRequest(request(), testEnv, ctx);
-  assert.equal(response.status, 200);
-  await Promise.all(pending);
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].from, "+15168714383");
-  assert.equal(sent[0].to, "+15555550131");
-  assert.match(sent[0].text, /Reply YES/);
-
-  const duplicate = await handleRequest(request(), testEnv, ctx);
-  assert.deepEqual(await duplicate.json(), { received: true, duplicate: true });
-  assert.equal(sent.length, 1);
-});
-
-test("Telnyx reply retries reuse the saved reply without advancing intake", async () => {
-  const sent = [];
-  let attempts = 0;
-  const testEnv = env({
-    telnyxMessageSender: async (message) => {
-      attempts += 1;
-      sent.push(message);
-      return attempts === 1 ? { ok: false, code: "test_failure" } : { ok: true };
-    }
-  });
-  const body = telnyxEvent({ id: "event-retry" });
-
-  await handleRequest(new Request("https://example.com/telnyx/sms", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body
-  }), testEnv);
-  const before = JSON.parse(await testEnv.INTAKE_KV.get("conversation:+15555550131"));
-  assert.equal(before.status, "awaiting_consent");
-
-  const result = await retryPendingTelnyxJobs(testEnv);
-  assert.equal(result.retried, 1);
-  assert.equal(sent.length, 2);
-  assert.equal(sent[0].text, sent[1].text);
-  const after = JSON.parse(await testEnv.INTAKE_KV.get("conversation:+15555550131"));
-  assert.equal(after.status, "awaiting_consent");
-  assert.equal(after.audit.filter(({ type }) => type === "start_received").length, 1);
-  assert.equal(await testEnv.INTAKE_KV.get("provider-job:telnyx:event-retry"), null);
-});
-
-test("Telnyx webhook verifies Ed25519 signatures and rejects stale timestamps", async () => {
-  const keys = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-  const publicKey = Buffer.from(await webcrypto.subtle.exportKey("raw", keys.publicKey)).toString("base64");
-  const testEnv = env({ telnyxMessageSender: async () => ({ ok: true }) });
-  testEnv.VALIDATE_TELNYX_SIGNATURE = "true";
-  testEnv.TELNYX_PUBLIC_KEY = publicKey;
-  const body = telnyxEvent({ id: "event-signed" });
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const signature = Buffer.from(await webcrypto.subtle.sign(
-    { name: "Ed25519" },
-    keys.privateKey,
-    new TextEncoder().encode(`${timestamp}|${body}`)
-  )).toString("base64");
-
-  const signedResponse = await handleRequest(new Request("https://example.com/telnyx/sms", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "telnyx-signature-ed25519": signature,
-      "telnyx-timestamp": timestamp
-    },
-    body
-  }), testEnv);
-  assert.equal(signedResponse.status, 200);
-
-  const staleTimestamp = String(Number(timestamp) - 301);
-  const staleSignature = Buffer.from(await webcrypto.subtle.sign(
-    { name: "Ed25519" },
-    keys.privateKey,
-    new TextEncoder().encode(`${staleTimestamp}|${body}`)
-  )).toString("base64");
-  const staleResponse = await handleRequest(new Request("https://example.com/telnyx/sms", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "telnyx-signature-ed25519": staleSignature,
-      "telnyx-timestamp": staleTimestamp
-    },
-    body
-  }), testEnv);
-  assert.equal(staleResponse.status, 403);
-});
-
-test("staff alerts can be sent through Telnyx", async () => {
+test("staff alerts are sent through the configured Twilio number", async () => {
   const alerts = [];
   const testEnv = env({
-    telnyxMessageSender: async (message) => {
+    twilioMessageSender: async (message) => {
       alerts.push(message);
       return { ok: true };
     }
   });
-  testEnv.STAFF_ALERT_PROVIDER = "telnyx";
-  testEnv.TELNYX_PHONE_NUMBER = "+15168714383";
+  testEnv.TWILIO_ACCOUNT_SID = "ACtest";
+  testEnv.TWILIO_AUTH_TOKEN = "test-token";
+  testEnv.TWILIO_PHONE_NUMBER = "+15168714383";
   testEnv.STAFF_ALERT_PHONE = "+15555550999";
   const phone = "+15555550132";
   const messages = [
@@ -408,9 +323,10 @@ test("staff alerts can be sent through Telnyx", async () => {
   for (const message of messages) await processIncomingSms(testEnv, phone, message);
 
   assert.equal(alerts.length, 2);
+  assert.equal(alerts[0].from, "+15168714383");
   assert.equal(alerts[0].to, "+15555550999");
-  assert.match(alerts[0].text, /URGENT PallviAgent intake/);
-  assert.match(alerts[1].text, /Intake complete/);
+  assert.match(alerts[0].body, /URGENT PallviAgent intake/);
+  assert.match(alerts[1].body, /Intake complete/);
 });
 
 test("authorized staff can acknowledge an urgent case by SMS", async () => {

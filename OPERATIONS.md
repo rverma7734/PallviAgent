@@ -4,8 +4,8 @@
 
 Do not advertise the line as monitored overnight until all of these are true:
 
-- The selected SMS provider campaign is approved and assigned to the production number.
-- The provider webhook points to the production Worker and signed webhooks are accepted.
+- The Twilio campaign is approved and the production number is in its Messaging Service Sender Pool.
+- The Twilio incoming-message webhook points to the production Worker and signed webhooks are accepted.
 - The primary staff phone receives both an urgent and a completed-intake alert.
 - The primary staff phone can acknowledge a test case.
 - The backup staff phone receives an overdue escalation.
