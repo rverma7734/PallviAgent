@@ -11,7 +11,7 @@ const CLIENT_COPY = {
     help: "This line collects immigration intake information for staff callback. Reply STOP to opt out. If someone is in immediate physical danger, call 911.",
     stop: "You have opted out and will not receive further texts from this intake line.",
     completedAlready: "Your intake has already been saved for staff callback. Reply START to begin a new intake, HELP for help, or STOP to opt out.",
-    urgentPrefix: "This appears urgent, and the on-call team has been alerted. Please continue. ",
+    urgentPrefix: "Urgent: on-call staff alerted. ",
     completed: "Thank you. The on-call team has been alerted. Please keep your phone available for a callback. If there is immediate physical danger, call 911.",
     deliveryFailed: "Thank you. Your intake was saved, but delivery to on-call staff has not been confirmed. Please try this line again shortly. If someone is in immediate physical danger, call 911.",
     tooLong: "That message is too long. Please resend only the basic facts in 800 characters or fewer. Do not send documents or identification numbers.",
@@ -22,14 +22,14 @@ const CLIENT_COPY = {
     callbackPhone: "¿A qué número debe llamar el personal?",
     personAtRisk: "¿Quién necesita ayuda? Responda YO, FAMILIAR, AMIGO, CLIENTE u OTRO.",
     location: "¿En qué ciudad y estado se encuentra la persona ahora?",
-    urgency: "¿Qué está pasando? Responda 1 ICE está aquí ahora, 2 detenido ahora, 3 audiencia/remoción/plazo dentro de 72 horas, 4 ayuda general de inmigración.",
-    details: "Describa brevemente lo ocurrido. No envíe documentos, números A, números de Seguro Social ni números de pasaporte por texto.",
+    urgency: "¿Qué pasa? 1 ICE aquí ahora; 2 detenido ahora; 3 audiencia/remoción/plazo en 72 horas; 4 ayuda general.",
+    details: "Describa el caso. No envíe documentos ni números de identificación.",
     help: "Esta línea recopila información de inmigración para que el personal le devuelva la llamada. Responda STOP para cancelar. Si alguien está en peligro físico inmediato, llame al 911.",
     stop: "Ha cancelado los mensajes y no recibirá más textos de esta línea de admisión.",
     completedAlready: "Su admisión ya fue guardada para que el personal le devuelva la llamada. Responda START para comenzar otra, HELP para ayuda o STOP para cancelar.",
-    urgentPrefix: "Esto parece urgente y se alertó al equipo de guardia. Continúe. ",
-    completed: "Gracias. Se alertó al equipo de guardia. Mantenga su teléfono disponible para una llamada. Si hay peligro físico inmediato, llame al 911.",
-    deliveryFailed: "Gracias. Su admisión fue guardada, pero no se confirmó la entrega al personal de guardia. Intente nuevamente en breve. Si hay peligro físico inmediato, llame al 911.",
+    urgentPrefix: "Urgente: equipo alertado. ",
+    completed: "Gracias. Equipo alertado. Espere llamada. Peligro inmediato: 911.",
+    deliveryFailed: "Admisión guardada, pero no se confirmó aviso al personal. Intente de nuevo. Peligro inmediato: 911.",
     tooLong: "Ese mensaje es demasiado largo. Envíe solo los datos básicos en 800 caracteres o menos. No envíe documentos ni números de identificación.",
     rateLimited: "Se recibieron demasiados mensajes en poco tiempo. Espere diez minutos e intente nuevamente. Si hay peligro físico inmediato, llame al 911."
   }
@@ -39,7 +39,7 @@ const STEPS = [
   {
     key: "consent",
     prompt: (env) =>
-      `You have reached ${env.INTAKE_ORG_NAME || "our"} emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.\n\nReply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out.`
+      `${env.INTAKE_ORG_NAME || "PallviAgent"} immigration intake for staff callback. Automated texts are not legal advice and do not create an attorney-client relationship. If anyone is in immediate danger, call 911. Reply YES to continue; STOP to opt out. After YES, choose 1 English or 2 Espanol.`
   },
   { key: "language", maxLength: 20, prompt: () => LANGUAGE_PROMPT },
   { key: "fullName", maxLength: 120, prompt: (_env, intake) => localized(intake, "fullName") },
@@ -247,7 +247,8 @@ export async function processIncomingSms(env, from, body) {
   intake.priority = classifyPriority(intake);
   intake.status = "needs_staff_callback";
   addAuditEvent(intake, "intake_completed", { priority: intake.priority });
-  const finalAlertSent = await attemptStaffAlert(env, intake, "complete");
+  const urgentAlertAlreadySent = ["P0", "P1"].includes(intake.priority) && Boolean(intake.alert?.lastSuccessfulAt);
+  const finalAlertSent = urgentAlertAlreadySent || await attemptStaffAlert(env, intake, "complete");
   await saveIntake(env, key, intake);
 
   if (finalAlertSent || intake.alert?.lastSuccessfulAt) {
@@ -303,18 +304,14 @@ async function notifyStaff(env, intake, kind, targetPhone = env.STAFF_ALERT_PHON
   if (typeof env.STAFF_NOTIFIER === "function") {
     return env.STAFF_NOTIFIER(intake, kind, targetPhone);
   }
+  const label = kind === "escalation" ? "ESCALATED" : kind === "urgent" ? "URGENT" : "NEW";
+  const language = intake.answers.language === "Spanish" ? "ES" : "EN";
+  const location = cleanAnswer(intake.answers.location || "N/A", 40);
   const body = [
-    `${kind === "escalation" ? "ESCALATED" : kind === "urgent" ? "URGENT" : "New"} PallviAgent intake - ${intake.priority}`,
-    `Case: ${caseToken(intake)}`,
-    `Location: ${intake.answers.location || "N/A"}`,
-    `Language: ${intake.answers.language || "N/A"}`,
-    `Callback: ${intake.answers.callbackPhone || intake.phone}`,
-    kind === "urgent"
-      ? "Initial alert; intake may still be in progress."
-      : kind === "escalation"
-        ? "Primary on-call acknowledgment is overdue."
-        : "Intake complete; call the listed callback number.",
-    isStaffAckEnabled(env) ? `Reply ACK ${caseToken(intake)}` : ""
+    `${label} PallviAgent ${intake.priority} ${caseToken(intake)}`,
+    `${location} | ${language}`,
+    `Call ${intake.answers.callbackPhone || intake.phone}`,
+    isStaffAckEnabled(env) ? `ACK ${caseToken(intake)}` : ""
   ].filter(Boolean).join("\n");
 
   if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_PHONE_NUMBER || !targetPhone) {

@@ -8,6 +8,22 @@ import {
   retryPendingAlerts
 } from "../src/index.mjs";
 
+const GSM_BASIC = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\u001bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const GSM_EXTENDED = "^{}\\[~]|€\f";
+
+function smsSegmentCount(value) {
+  let septets = 0;
+  for (const character of String(value)) {
+    if (GSM_BASIC.includes(character)) septets += 1;
+    else if (GSM_EXTENDED.includes(character)) septets += 2;
+    else {
+      const units = [...String(value)].reduce((total, item) => total + (item.codePointAt(0) > 0xffff ? 2 : 1), 0);
+      return units <= 70 ? 1 : Math.ceil(units / 67);
+    }
+  }
+  return septets <= 160 ? 1 : Math.ceil(septets / 153);
+}
+
 function env(options = {}) {
   const store = new Map();
   return {
@@ -47,8 +63,12 @@ test("emergency flow classifies detention as P0", async () => {
   const phone = "+15555550123";
 
   assert.match(await processIncomingSms(testEnv, phone, "hello"), /reply START/i);
-  assert.match(await processIncomingSms(testEnv, phone, "START"), /Reply YES/);
-  assert.match(await processIncomingSms(testEnv, phone, "YES"), /Choose your language/);
+  const consentReply = await processIncomingSms(testEnv, phone, "START");
+  assert.match(consentReply, /Reply YES/);
+  assert.equal(smsSegmentCount(consentReply), 2);
+  const languageReply = await processIncomingSms(testEnv, phone, "YES");
+  assert.match(languageReply, /Choose your language/);
+  assert.equal(smsSegmentCount(languageReply), 1);
   assert.equal(await processIncomingSms(testEnv, phone, "1"), "What is your full name?");
 
   const answers = [
@@ -69,7 +89,7 @@ test("emergency flow classifies detention as P0", async () => {
   const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
   assert.equal(saved.priority, "P0");
   assert.equal(saved.status, "needs_staff_callback");
-  assert.deepEqual(notifications.map(({ kind }) => kind), ["urgent", "complete"]);
+  assert.deepEqual(notifications.map(({ kind }) => kind), ["urgent"]);
   assert.ok(saved.audit.some(({ type }) => type === "consent_granted"));
   assert.ok(saved.audit.some(({ type, language }) => type === "language_selected" && language === "English"));
   assert.ok(saved.audit.some(({ type }) => type === "staff_alert_sent"));
@@ -91,22 +111,21 @@ test("Spanish selection localizes the intake and is recorded in the audit", asyn
   assert.match(await processIncomingSms(testEnv, phone, "not-a-language"), /Responda 2 para Español/);
   assert.equal(await processIncomingSms(testEnv, phone, "2"), "¿Cuál es su nombre completo?");
 
-  const answers = [
-    "María López",
-    "+1 555 555 0136",
-    "FAMILIAR",
-    "Newark NJ",
-    "2 detenido ahora",
-    "ICE detuvo a mi esposo esta noche."
-  ];
-  let reply = "";
-  for (const answer of answers) reply = await processIncomingSms(testEnv, phone, answer);
+  await processIncomingSms(testEnv, phone, "María López");
+  await processIncomingSms(testEnv, phone, "+1 555 555 0136");
+  await processIncomingSms(testEnv, phone, "FAMILIAR");
+  const urgencyReply = await processIncomingSms(testEnv, phone, "Newark NJ");
+  assert.equal(smsSegmentCount(urgencyReply), 2);
+  const detailsReply = await processIncomingSms(testEnv, phone, "2 detenido ahora");
+  assert.equal(smsSegmentCount(detailsReply), 2);
+  const reply = await processIncomingSms(testEnv, phone, "ICE detuvo a mi esposo esta noche.");
 
-  assert.match(reply, /equipo de guardia/);
+  assert.match(reply, /Equipo alertado/);
+  assert.equal(smsSegmentCount(reply), 1);
   const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
   assert.equal(saved.answers.language, "Spanish");
   assert.equal(saved.priority, "P0");
-  assert.deepEqual(notifications.map(({ kind }) => kind), ["urgent", "complete"]);
+  assert.deepEqual(notifications.map(({ kind }) => kind), ["urgent"]);
   assert.ok(saved.audit.some(({ type, language }) => type === "language_selected" && language === "Spanish"));
 });
 
@@ -322,11 +341,11 @@ test("staff alerts are sent through the configured Twilio number", async () => {
   ];
   for (const message of messages) await processIncomingSms(testEnv, phone, message);
 
-  assert.equal(alerts.length, 2);
+  assert.equal(alerts.length, 1);
   assert.equal(alerts[0].from, "+15168714383");
   assert.equal(alerts[0].to, "+15555550999");
-  assert.match(alerts[0].body, /URGENT PallviAgent intake/);
-  assert.match(alerts[1].body, /Intake complete/);
+  assert.match(alerts[0].body, /URGENT PallviAgent P0/);
+  assert.equal(smsSegmentCount(alerts[0].body), 1);
 });
 
 test("authorized staff can acknowledge an urgent case by SMS", async () => {

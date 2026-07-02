@@ -373,7 +373,7 @@
         summary: "Family member detained by ICE tonight. Sender is available at the callback number and requests a Spanish-speaking staff member.",
         messages: [
           ["user", "START"],
-          ["agent", "You have reached PallviAgent emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship. If someone is in immediate physical danger, call 911.\n\nReply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out."],
+          ["agent", "PallviAgent immigration intake for staff callback. Automated texts are not legal advice and do not create an attorney-client relationship. If anyone is in immediate danger, call 911. Reply YES to continue; STOP to opt out. After YES, choose 1 English or 2 Espanol."],
           ["user", "YES"],
           ["agent", "PallviAgent: Choose your language / Elija su idioma. Reply 1 for English. Responda 2 para Español. Reply STOP to opt out."],
           ["user", "2"],
@@ -385,11 +385,11 @@
           ["user", "FAMILIAR"],
           ["agent", "¿En qué ciudad y estado se encuentra la persona ahora?"],
           ["user", "Newark, NJ"],
-          ["agent", "¿Qué está pasando? Responda 1 ICE está aquí ahora, 2 detenido ahora, 3 audiencia/remoción/plazo dentro de 72 horas, 4 ayuda general de inmigración."],
+          ["agent", "¿Qué pasa? 1 ICE aquí ahora; 2 detenido ahora; 3 audiencia/remoción/plazo en 72 horas; 4 ayuda general."],
           ["user", "2 detenido ahora", "urgent"],
-          ["agent", "Esto parece urgente y se alertó al equipo de guardia. Continúe. Describa brevemente lo ocurrido. No envíe documentos, números A, números de Seguro Social ni números de pasaporte por texto."],
+          ["agent", "Urgente: equipo alertado. Describa el caso. No envíe documentos ni números de identificación."],
           ["user", "ICE detuvo a un familiar esta noche."],
-          ["agent", "Gracias. Se alertó al equipo de guardia. Mantenga su teléfono disponible para una llamada. Si hay peligro físico inmediato, llame al 911.", "complete"]
+          ["agent", "Gracias. Equipo alertado. Espere llamada. Peligro inmediato: 911.", "complete"]
         ]
       },
       general: {
@@ -403,7 +403,7 @@
         summary: "Sender requests a callback about a recently received immigration notice. No immediate detention, removal, or deadline was reported.",
         messages: [
           ["user", "START"],
-          ["agent", "You have reached PallviAgent emergency immigration intake line. This line collects basic information for staff callback. It is not legal advice and does not create an attorney-client relationship.\n\nReply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out."],
+          ["agent", "PallviAgent immigration intake for staff callback. Automated texts are not legal advice and do not create an attorney-client relationship. If anyone is in immediate danger, call 911. Reply YES to continue; STOP to opt out. After YES, choose 1 English or 2 Espanol."],
           ["user", "YES"], ["agent", "PallviAgent: Choose your language / Elija su idioma. Reply 1 for English. Responda 2 para Español. Reply STOP to opt out."], ["user", "1"],
           ["agent", "What is your full name?"], ["user", "Test Person"],
           ["agent", "What phone number should staff call back?"], ["user", "+1 (555) 555-0144"],
@@ -425,14 +425,14 @@
         risk: "Friend",
         summary: "Sender reports ICE at a friend's residence. Intake was saved, but staff alert delivery has not been confirmed.",
         messages: [
-          ["user", "START"], ["agent", "You have reached PallviAgent emergency immigration intake line. Reply YES to continue by text. After YES, choose 1 English or 2 Español. Reply STOP to opt out."],
+          ["user", "START"], ["agent", "PallviAgent immigration intake for staff callback. Automated texts are not legal advice. Reply YES to continue; STOP to opt out. After YES, choose 1 English or 2 Espanol."],
           ["user", "YES"], ["agent", "PallviAgent: Choose your language / Elija su idioma. Reply 1 for English. Responda 2 para Español. Reply STOP to opt out."], ["user", "2"],
           ["agent", "¿Cuál es su nombre completo?"], ["user", "Persona de Prueba"],
           ["agent", "¿A qué número debe llamar el personal?"], ["user", "+1 (555) 555-0228"],
           ["agent", "¿Quién necesita ayuda?"], ["user", "AMIGO"], ["agent", "¿En qué ciudad y estado se encuentra la persona ahora?"], ["user", "Elizabeth, NJ"],
-          ["agent", "¿Qué está pasando?"], ["user", "1 ICE está aquí ahora", "urgent-failed"],
-          ["agent", "Describa brevemente lo ocurrido. No envíe documentos ni números de identificación."], ["user", "ICE está afuera de la casa de mi amigo."],
-          ["agent", "Gracias. Su admisión fue guardada, pero no se confirmó la entrega al personal de guardia. Intente nuevamente en breve. Si hay peligro físico inmediato, llame al 911.", "failed"]
+          ["agent", "¿Qué pasa?"], ["user", "1 ICE está aquí ahora", "urgent-failed"],
+          ["agent", "Describa el caso. No envíe documentos ni números de identificación."], ["user", "ICE está afuera de la casa de mi amigo."],
+          ["agent", "Admisión guardada, pero no se confirmó aviso al personal. Intente de nuevo. Peligro inmediato: 911.", "failed"]
         ]
       }
     };
