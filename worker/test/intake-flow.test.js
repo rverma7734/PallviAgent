@@ -30,6 +30,7 @@ function env(options = {}) {
     INTAKE_ORG_NAME: "PallviAgent",
     AI: options.ai,
     AI_TRIAGE_ENABLED: options.aiTriageEnabled ? "true" : "false",
+    AI_SUMMARY_ENABLED: options.aiSummaryEnabled ? "true" : "false",
     VALIDATE_TWILIO_SIGNATURE: "false",
     STAFF_NOTIFIER: options.staffNotifier,
     TWILIO_MESSAGE_SENDER: options.twilioMessageSender,
@@ -300,7 +301,7 @@ test("privacy policy discloses limited automated triage", async () => {
 
   assert.equal(response.status, 200);
   assert.match(body, /Automated Triage/);
-  assert.match(body, /does not receive the sender's name, phone number, callback number, or full intake/);
+  assert.match(body, /does not receive the sender's name, phone number, or callback number/);
   assert.match(body, /cannot lower a rule-based emergency classification/);
 });
 
@@ -420,8 +421,89 @@ test("staff alerts are sent through the configured Twilio number", async () => {
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].from, "+15168714383");
   assert.equal(alerts[0].to, "+15555550999");
-  assert.match(alerts[0].body, /URGENT PallviAgent P0/);
+  assert.equal(alerts[0].body, [
+    "URGENT PallviAgent P0 | EN",
+    "Newark NJ",
+    "2 detained now",
+    "Call (555) 555-0132"
+  ].join("\n"));
   assert.equal(smsSegmentCount(alerts[0].body), 1);
+});
+
+test("AI formats a concise staff summary without receiving identity fields", async () => {
+  const alerts = [];
+  let modelInput;
+  const testEnv = env({
+    aiSummaryEnabled: true,
+    ai: {
+      async run(_model, input) {
+        modelInput = input;
+        return { response: "Client received notice and requests staff review." };
+      }
+    },
+    twilioMessageSender: async (message) => {
+      alerts.push(message);
+      return { ok: true };
+    }
+  });
+  testEnv.TWILIO_ACCOUNT_SID = "ACtest";
+  testEnv.TWILIO_AUTH_TOKEN = "test-token";
+  testEnv.TWILIO_PHONE_NUMBER = "+15168714383";
+  testEnv.STAFF_ALERT_PHONE = "+15555550999";
+  const phone = "+16462048447";
+  const messages = [
+    "START", "YES", "1", "Private Name", phone, "SELF", "Queens NY",
+    "4 general immigration help", "Received a court notice and needs help."
+  ];
+  for (const message of messages) await processIncomingSms(testEnv, phone, message);
+
+  assert.equal(alerts.length, 1);
+  assert.doesNotMatch(JSON.stringify(modelInput), /Private Name|16462048447/);
+  assert.match(modelInput.messages[1].content, /general immigration help/);
+  assert.match(modelInput.messages[1].content, /court notice/);
+  assert.equal(alerts[0].body, [
+    "NEW PallviAgent P2 | EN",
+    "Queens NY",
+    "Client received notice and requests staff review",
+    "Call (646) 204-8447"
+  ].join("\n"));
+  assert.equal(smsSegmentCount(alerts[0].body), 1);
+  const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
+  assert.ok(saved.audit.some(({ type }) => type === "ai_summary_generated"));
+});
+
+test("AI summary failures use the deterministic intake text", async () => {
+  const alerts = [];
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  const testEnv = env({
+    aiSummaryEnabled: true,
+    ai: { async run() { throw new Error("test failure"); } },
+    twilioMessageSender: async (message) => {
+      alerts.push(message);
+      return { ok: true };
+    }
+  });
+  testEnv.TWILIO_ACCOUNT_SID = "ACtest";
+  testEnv.TWILIO_AUTH_TOKEN = "test-token";
+  testEnv.TWILIO_PHONE_NUMBER = "+15168714383";
+  testEnv.STAFF_ALERT_PHONE = "+15555550999";
+  const phone = "+15555550142";
+  try {
+    const messages = [
+      "START", "YES", "1", "Private Name", phone, "SELF", "Boston MA",
+      "4 general immigration help", "Needs help understanding a notice."
+    ];
+    for (const message of messages) await processIncomingSms(testEnv, phone, message);
+
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0].body, /Needs help understanding a notice/);
+    assert.equal(smsSegmentCount(alerts[0].body), 1);
+    const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
+    assert.ok(saved.audit.some(({ type }) => type === "ai_summary_failed"));
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 test("authorized staff can acknowledge an urgent case by SMS", async () => {
