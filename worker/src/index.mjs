@@ -750,14 +750,6 @@ async function updateHubIntake(request, env, token) {
 
   const allowedStatuses = new Set(["needs_staff_callback", "in_progress", "callback_scheduled", "closed"]);
   const nextStatus = cleanAnswer(payload.status, 40);
-  if (nextStatus) {
-    if (!allowedStatuses.has(nextStatus)) return json({ error: "invalid status" }, 400);
-    if (intake.status !== nextStatus) {
-      intake.status = nextStatus;
-      addAuditEvent(intake, "hub_status_updated", { status: nextStatus });
-    }
-  }
-
   const assignedTo = cleanAnswer(payload.assignedTo, 80);
   if (assignedTo !== cleanAnswer(intake.assignedTo, 80)) {
     intake.assignedTo = assignedTo;
@@ -766,13 +758,25 @@ async function updateHubIntake(request, env, token) {
 
   const note = cleanAnswer(payload.note, 600);
   const outcome = cleanAnswer(payload.outcome, 80);
-  if (outcome) {
+  const outcomeStatus = outcome ? statusForOutcome(outcome) : "";
+  const resolvedStatus = outcomeStatus || nextStatus;
+  if (resolvedStatus) {
+    if (!allowedStatuses.has(resolvedStatus)) return json({ error: "invalid status" }, 400);
+    if (intake.status !== resolvedStatus) {
+      intake.status = resolvedStatus;
+      addAuditEvent(intake, "hub_status_updated", { status: resolvedStatus });
+    }
+  }
+
+  if (outcome && (outcome !== cleanAnswer(intake.lastOutcome, 80) || note)) {
     intake.lastOutcome = outcome;
     intake.lastActionAt = nowIso();
     intake.staffNotes = Array.isArray(intake.staffNotes) ? intake.staffNotes : [];
     intake.staffNotes.push({ at: intake.lastActionAt, type: "outcome", outcome, note });
     intake.staffNotes = intake.staffNotes.slice(-25);
     addAuditEvent(intake, "hub_outcome_recorded", { outcome });
+  } else if (outcome) {
+    intake.lastOutcome = outcome;
   } else if (note) {
     intake.lastActionAt = nowIso();
     intake.staffNotes = Array.isArray(intake.staffNotes) ? intake.staffNotes : [];
@@ -821,6 +825,21 @@ function hubIntakeDetail(intake) {
     staffNotes: Array.isArray(intake.staffNotes) ? intake.staffNotes : [],
     audit: Array.isArray(intake.audit) ? intake.audit.slice(-20) : []
   };
+}
+
+function statusForOutcome(outcome) {
+  const map = {
+    needs_callback: "needs_staff_callback",
+    in_progress: "in_progress",
+    callback_scheduled: "callback_scheduled",
+    called_no_answer: "in_progress",
+    left_voicemail: "in_progress",
+    reached_client: "in_progress",
+    needs_attorney_review: "in_progress",
+    wrong_number: "in_progress",
+    closed_after_callback: "closed"
+  };
+  return map[outcome] || "";
 }
 
 function hubSearchText(summary, intake) {
@@ -1356,7 +1375,7 @@ a { color: var(--blue); }
   border-radius: 7px;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(160px, 0.7fr) minmax(180px, 0.8fr) minmax(240px, 1fr) auto;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(240px, 1fr) auto;
   padding: 12px;
 }
 .outcomes {
@@ -1368,6 +1387,10 @@ a { color: var(--blue); }
   font-size: 12px;
   min-height: 32px;
   padding: 0 9px;
+}
+.outcome-button.primary-action {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .outcome-button.selected {
   background: var(--blue);
@@ -1557,6 +1580,9 @@ function statusLabel(value) {
 
 function outcomeLabel(value) {
   return {
+    needs_callback: "Needs callback",
+    in_progress: "In progress",
+    callback_scheduled: "Callback scheduled",
     called_no_answer: "Called - no answer",
     left_voicemail: "Left voicemail",
     reached_client: "Reached client",
@@ -1580,6 +1606,14 @@ function phoneLink(value, label) {
   const text = value || "Not provided";
   if (!href) return escapeHtml(text);
   return '<a class="phone-link" href="' + escapeHtml(href) + '">' + escapeHtml(label || text) + '</a>';
+}
+
+function currentOutcome(item) {
+  if (item.lastOutcome) return item.lastOutcome;
+  if (item.status === "needs_staff_callback") return "needs_callback";
+  if (item.status === "callback_scheduled") return "callback_scheduled";
+  if (item.status === "closed") return "closed_after_callback";
+  return "in_progress";
 }
 
 async function api(path, options) {
@@ -1649,7 +1683,6 @@ async function loadDetail(token) {
   detailTitle.textContent = (item.priority || "P2") + " " + (item.name || "Name unavailable");
   detailTime.textContent = formatDate(item.updatedAt);
   detailBody.innerHTML = renderDetail(item);
-  document.getElementById("caseStatus").value = item.status || "needs_staff_callback";
   document.getElementById("saveCase").addEventListener("click", async function() {
     await saveDetail(item.token);
   });
@@ -1657,11 +1690,6 @@ async function loadDetail(token) {
     button.addEventListener("click", function() {
       document.querySelectorAll(".outcome-button").forEach(function(item) { item.classList.remove("selected"); });
       button.classList.add("selected");
-      if (button.dataset.outcome === "closed_after_callback") {
-        document.getElementById("caseStatus").value = "closed";
-      } else if (document.getElementById("caseStatus").value === "needs_staff_callback") {
-        document.getElementById("caseStatus").value = "in_progress";
-      }
     });
   });
 }
@@ -1680,15 +1708,21 @@ function renderDetail(item) {
       }).join("")
     : '<div class="empty">No staff notes yet.</div>';
   const outcomes = [
+    ["needs_callback", "Needs callback", "primary-action"],
+    ["in_progress", "In progress", ""],
+    ["callback_scheduled", "Scheduled", ""],
     ["called_no_answer", "No answer"],
     ["left_voicemail", "Voicemail"],
     ["reached_client", "Reached"],
     ["needs_attorney_review", "Attorney review"],
     ["wrong_number", "Wrong number"],
     ["closed_after_callback", "Close"]
-  ].map(function(entry) {
-    const selected = item.lastOutcome === entry[0] ? " selected" : "";
-    return '<button class="outcome-button' + selected + '" type="button" data-outcome="' + entry[0] + '">' + escapeHtml(entry[1]) + '</button>';
+  ];
+  const selectedOutcome = currentOutcome(item);
+  const outcomeButtons = outcomes.map(function(entry) {
+    const selected = selectedOutcome === entry[0] ? " selected" : "";
+    const extraClass = entry[2] ? " " + entry[2] : "";
+    return '<button class="outcome-button' + extraClass + selected + '" type="button" data-outcome="' + entry[0] + '">' + escapeHtml(entry[1]) + '</button>';
   }).join("");
   return '<div class="summary-grid">' +
     block("Callback", item.callbackPhone, false, { phone: true }) +
@@ -1703,24 +1737,17 @@ function renderDetail(item) {
     block("Details", item.details, true) +
     block("AI/staff summary", item.summary, true) +
     '</div>' +
+    '<div class="field"><label>Outcome</label><div class="outcomes">' + outcomeButtons + '</div></div>' +
     '<div class="actions">' +
-      '<div class="field"><label for="caseStatus">Status</label><select id="caseStatus">' +
-        '<option value="needs_staff_callback">Needs callback</option>' +
-        '<option value="in_progress">In progress</option>' +
-        '<option value="callback_scheduled">Scheduled</option>' +
-        '<option value="closed">Closed</option>' +
-      '</select></div>' +
       '<div class="field"><label for="assignedTo">Assigned to</label><input id="assignedTo" type="text" placeholder="Unassigned" value="' + escapeHtml(item.assignedTo || "") + '"></div>' +
       '<div class="field"><label for="caseNote">Note</label><textarea id="caseNote" placeholder="Callback result, assignment, next step"></textarea></div>' +
       '<button id="saveCase" class="primary" type="button">Save</button>' +
     '</div>' +
-    '<div class="field"><label>Quick outcome</label><div class="outcomes">' + outcomes + '</div></div>' +
     '<section class="notes"><strong>Staff notes</strong>' + notes + '</section>';
 }
 
 async function saveDetail(token) {
   const payload = {
-    status: document.getElementById("caseStatus").value,
     assignedTo: document.getElementById("assignedTo").value,
     outcome: document.querySelector(".outcome-button.selected")?.dataset.outcome || "",
     note: document.getElementById("caseNote").value

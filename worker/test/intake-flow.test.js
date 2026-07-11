@@ -352,7 +352,6 @@ test("staff hub lists and updates completed intakes", async () => {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      status: "in_progress",
       assignedTo: "Overnight staff",
       outcome: "left_voicemail",
       note: "Left voicemail and will retry."
