@@ -21,6 +21,8 @@ python3 -m venv .venv
 ## Key routes
 
 - `/sms` - Twilio webhook
+- `/hub` - token-protected staff intake queue for deployed Worker records
+- `/api/intakes` - token-protected staff hub API
 - `/simulate` - local testing endpoint
 - `/conversations` - list saved conversations
 - `/conversations/<phone>` - full conversation detail
@@ -81,9 +83,11 @@ For production, set:
 ```text
 VALIDATE_TWILIO_SIGNATURE=true
 PUBLIC_BASE_URL=https://YOUR-DOMAIN
+HUB_ACCESS_TOKEN=<long shared staff access code>
 ```
 
 This enables Twilio request signature validation for `/sms`.
+The `/hub` staff queue requires `HUB_ACCESS_TOKEN` as a Worker secret before any intake data can be loaded in the browser.
 
 ## Deployment
 

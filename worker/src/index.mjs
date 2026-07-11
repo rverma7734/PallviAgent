@@ -98,6 +98,30 @@ export async function handleRequest(request, env, ctx) {
     return html(SMS_OPT_IN_HTML);
   }
 
+  if (request.method === "GET" && url.pathname === "/hub") {
+    return html(HUB_HTML);
+  }
+
+  if (url.pathname === "/api/intakes" && request.method === "GET") {
+    const auth = authorizeHubRequest(request, env);
+    if (auth) return auth;
+    return json(await listHubIntakes(env, url.searchParams));
+  }
+
+  const intakeMatch = url.pathname.match(/^\/api\/intakes\/([A-Z0-9]{8})$/i);
+  if (intakeMatch && request.method === "GET") {
+    const auth = authorizeHubRequest(request, env);
+    if (auth) return auth;
+    const record = await loadHubIntakeByToken(env, intakeMatch[1]);
+    return record ? json(record) : json({ error: "not found" }, 404);
+  }
+
+  if (intakeMatch && request.method === "PATCH") {
+    const auth = authorizeHubRequest(request, env);
+    if (auth) return auth;
+    return updateHubIntake(request, env, intakeMatch[1]);
+  }
+
   if (request.method === "POST" && url.pathname === "/sms") {
     if (!(await isValidTwilioRequest(request, env))) {
       return new Response("invalid signature", { status: 403 });
@@ -449,21 +473,145 @@ async function sendTwilioMessage(env, message) {
   return { ok: true };
 }
 
+async function notifyStaffEmail(env, intake, kind) {
+  if (typeof env.STAFF_EMAIL_NOTIFIER === "function") {
+    return env.STAFF_EMAIL_NOTIFIER(intake, kind);
+  }
+  if (!env.RESEND_API_KEY || !env.STAFF_ALERT_EMAIL || !env.STAFF_FROM_EMAIL) {
+    return { ok: false, code: "configuration_missing" };
+  }
+
+  const priorityLabel = priorityLabelFor(intake.priority);
+  const language = intake.answers.language || "Unknown";
+  const subject = `[${priorityLabel}] ${intake.answers.fullName || "New intake"} - ${intake.answers.location || "Location unavailable"}`;
+  const text = staffEmailText(intake, kind);
+  const htmlBody = staffEmailHtml(intake, kind);
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: `${env.INTAKE_ORG_NAME || "PallviAgent"} Intake <${env.STAFF_FROM_EMAIL}>`,
+      to: [env.STAFF_ALERT_EMAIL],
+      subject,
+      text,
+      html: htmlBody,
+      tags: [
+        { name: "priority", value: intake.priority || "P2" },
+        { name: "language", value: language === "Spanish" ? "es" : "en" },
+        { name: "kind", value: kind }
+      ]
+    })
+  });
+
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    console.error("Staff email failed", response.status);
+    return { ok: false, code: `resend_${response.status}` };
+  }
+  return { ok: true, messageId: payload.id || null };
+}
+
+function staffEmailText(intake, kind) {
+  const answers = intake.answers || {};
+  return [
+    `${priorityLabelFor(intake.priority)} ${kind === "urgent" ? "urgent intake" : "completed intake"}`,
+    "",
+    `Received: ${formatEmailDate(intake.updatedAt || intake.createdAt)}`,
+    `Language: ${answers.language || "Unknown"}`,
+    `Name: ${answers.fullName || "Not provided"}`,
+    `Callback: ${answers.callbackPhone || intake.phone || "Not provided"}`,
+    `Location: ${answers.location || "Not provided"}`,
+    `Relationship: ${answers.personAtRisk || "Not provided"}`,
+    `Summary: ${intake.alert?.summary || "Not available"}`,
+    `Urgency: ${answers.urgency || "Not provided"}`,
+    "",
+    "Details:",
+    answers.details || "Not provided",
+    "",
+    `Immediate SMS alert: ${intake.alert?.status || "attempted"}`
+  ].join("\n");
+}
+
+function staffEmailHtml(intake, kind) {
+  const answers = intake.answers || {};
+  const rows = [
+    ["Priority", priorityLabelFor(intake.priority)],
+    ["Received", formatEmailDate(intake.updatedAt || intake.createdAt)],
+    ["Language", answers.language || "Unknown"],
+    ["Name", answers.fullName || "Not provided"],
+    ["Callback", answers.callbackPhone || intake.phone || "Not provided"],
+    ["Location", answers.location || "Not provided"],
+    ["Relationship", answers.personAtRisk || "Not provided"],
+    ["Summary", intake.alert?.summary || "Not available"],
+    ["Urgency", answers.urgency || "Not provided"],
+    ["Immediate SMS alert", intake.alert?.status || "attempted"]
+  ];
+  return `<!doctype html><html><body style="font-family:Arial,Helvetica,sans-serif;color:#17202a;line-height:1.45">
+    <h1 style="font-size:20px;margin:0 0 12px">${escapeHtml(priorityLabelFor(intake.priority))} ${kind === "urgent" ? "Urgent intake" : "Completed intake"}</h1>
+    <table style="border-collapse:collapse;width:100%;max-width:720px">${rows.map(([label, value]) => `<tr><th style="border-bottom:1px solid #d8dee4;color:#64707d;font-size:12px;text-align:left;text-transform:uppercase;padding:8px 10px 8px 0;width:160px">${escapeHtml(label)}</th><td style="border-bottom:1px solid #d8dee4;padding:8px 0">${escapeHtml(value)}</td></tr>`).join("")}</table>
+    <h2 style="font-size:15px;margin:18px 0 8px">Details</h2>
+    <p style="white-space:pre-wrap;max-width:720px">${escapeHtml(answers.details || "Not provided")}</p>
+  </body></html>`;
+}
+
+function priorityLabelFor(priority) {
+  if (priority === "P0") return "P0 URGENT";
+  if (priority === "P1") return "P1 TIME-SENSITIVE";
+  return "P2 ROUTINE";
+}
+
+function formatEmailDate(value) {
+  const date = new Date(value || Date.now());
+  return Number.isNaN(date.getTime()) ? String(value || "") : date.toISOString();
+}
+
 async function attemptStaffAlert(env, intake, kind) {
   intake.alert = intake.alert || { attempts: 0 };
   intake.alert.attempts += 1;
   intake.alert.lastAttemptAt = nowIso();
   intake.alert.pendingKind = kind;
 
-  let result;
+  await staffAlertSummary(env, intake);
+  let smsResult;
+  let emailResult;
   try {
-    result = await notifyStaff(env, intake, kind);
+    [smsResult, emailResult] = await Promise.all([
+      notifyStaff(env, intake, kind),
+      notifyStaffEmail(env, intake, kind)
+    ]);
   } catch (error) {
     console.error("Staff alert request failed", error instanceof Error ? error.message : "unknown error");
-    result = { ok: false, code: "request_failed" };
+    smsResult = smsResult || { ok: false, code: "request_failed" };
+    emailResult = emailResult || { ok: false, code: "request_failed" };
   }
 
-  if (result.ok) {
+  if (emailResult?.ok) {
+    intake.emailAlert = {
+      status: "sent",
+      lastSuccessfulAt: nowIso(),
+      lastMessageId: emailResult.messageId || null,
+      lastErrorCode: null
+    };
+    addAuditEvent(intake, "staff_email_sent", { kind });
+  } else if (emailResult && emailResult.code !== "configuration_missing") {
+    intake.emailAlert = {
+      ...(intake.emailAlert || {}),
+      status: "failed",
+      lastAttemptAt: nowIso(),
+      lastErrorCode: emailResult.code || "unknown"
+    };
+    addAuditEvent(intake, "staff_email_failed", { kind, code: intake.emailAlert.lastErrorCode });
+  }
+
+  if (smsResult?.ok) {
     intake.alert.status = intake.alert.acknowledgedAt ? "acknowledged" : "sent";
     intake.alert.lastSuccessfulAt = nowIso();
     intake.alert.pendingKind = null;
@@ -473,9 +621,9 @@ async function attemptStaffAlert(env, intake, kind) {
   }
 
   intake.alert.status = "pending_retry";
-  intake.alert.lastErrorCode = result.code || "unknown";
+  intake.alert.lastErrorCode = smsResult?.code || "unknown";
   addAuditEvent(intake, "staff_alert_failed", { kind, code: intake.alert.lastErrorCode });
-  return false;
+  return Boolean(emailResult?.ok);
 }
 
 export async function retryPendingAlerts(env) {
@@ -526,6 +674,162 @@ async function processStaffAcknowledgment(env, from, body) {
   intake.updatedAt = nowIso();
   await saveIntake(env, conversationKeyValue, intake);
   return `PallviAgent: case ${token} acknowledged. Please call ${intake.answers.callbackPhone || intake.phone}.`;
+}
+
+function authorizeHubRequest(request, env) {
+  const configuredToken = String(env.HUB_ACCESS_TOKEN || "").trim();
+  if (configuredToken.length < 12) {
+    return json({ error: "hub not configured" }, 503);
+  }
+  const suppliedToken = String(request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  if (!suppliedToken || suppliedToken !== configuredToken) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  return null;
+}
+
+async function listHubIntakes(env, searchParams) {
+  if (!env.INTAKE_KV?.list) return { intakes: [] };
+  const status = String(searchParams.get("status") || "").trim();
+  const priority = String(searchParams.get("priority") || "").trim().toUpperCase();
+  const query = String(searchParams.get("q") || "").trim().toLowerCase();
+  const limit = clampNumber(searchParams.get("limit"), 1, 250, 100);
+  const intakes = [];
+  let cursor;
+
+  do {
+    const page = await env.INTAKE_KV.list({ prefix: "conversation:", cursor, limit: 100 });
+    for (const item of page.keys || []) {
+      const intake = await loadIntake(env, item.name);
+      if (!intake || intake.status === "opted_out" || intake.status === "closed_no_consent") continue;
+      const summary = hubIntakeSummary(intake);
+      if (!summary.token) continue;
+      if (status && summary.status !== status) continue;
+      if (priority && summary.priority !== priority) continue;
+      if (query && !hubSearchText(summary, intake).includes(query)) continue;
+      intakes.push(summary);
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor && intakes.length < limit);
+
+  intakes.sort(compareHubIntakes);
+  return { intakes: intakes.slice(0, limit), generatedAt: nowIso() };
+}
+
+async function loadHubIntakeByToken(env, token) {
+  const lookupKey = caseLookupKey(token);
+  let conversationKeyValue = await env.INTAKE_KV.get(lookupKey);
+  if (!conversationKeyValue && env.INTAKE_KV?.list) {
+    const page = await env.INTAKE_KV.list({ prefix: "conversation:", limit: 100 });
+    for (const item of page.keys || []) {
+      const candidate = await loadIntake(env, item.name);
+      if (candidate && caseToken(candidate) === String(token).toUpperCase()) {
+        conversationKeyValue = item.name;
+        break;
+      }
+    }
+  }
+  if (!conversationKeyValue) return null;
+  const intake = await loadIntake(env, conversationKeyValue);
+  if (!intake) return null;
+  return hubIntakeDetail(intake);
+}
+
+async function updateHubIntake(request, env, token) {
+  const conversationKeyValue = await env.INTAKE_KV.get(caseLookupKey(token));
+  if (!conversationKeyValue) return json({ error: "not found" }, 404);
+  const intake = await loadIntake(env, conversationKeyValue);
+  if (!intake) return json({ error: "not found" }, 404);
+
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+
+  const allowedStatuses = new Set(["needs_staff_callback", "in_progress", "callback_scheduled", "closed"]);
+  const nextStatus = cleanAnswer(payload.status, 40);
+  if (nextStatus) {
+    if (!allowedStatuses.has(nextStatus)) return json({ error: "invalid status" }, 400);
+    if (intake.status !== nextStatus) {
+      intake.status = nextStatus;
+      addAuditEvent(intake, "hub_status_updated", { status: nextStatus });
+    }
+  }
+
+  const note = cleanAnswer(payload.note, 600);
+  if (note) {
+    intake.staffNotes = Array.isArray(intake.staffNotes) ? intake.staffNotes : [];
+    intake.staffNotes.push({ at: nowIso(), note });
+    intake.staffNotes = intake.staffNotes.slice(-25);
+    addAuditEvent(intake, "hub_note_added");
+  }
+
+  intake.updatedAt = nowIso();
+  await saveIntake(env, conversationKeyValue, intake);
+  return json(hubIntakeDetail(intake));
+}
+
+function hubIntakeSummary(intake) {
+  const answers = intake.answers || {};
+  return {
+    token: caseToken(intake),
+    priority: intake.priority || "P2",
+    status: intake.status || "open",
+    language: answers.language || "Unknown",
+    name: answers.fullName || "",
+    callbackPhone: answers.callbackPhone || intake.phone || "",
+    location: answers.location || "",
+    relationship: answers.personAtRisk || "",
+    summary: intake.alert?.summary || compactStaffSummary(answers.details || answers.urgency || "", 90),
+    alertStatus: intake.alert?.status || "",
+    lastAlertAt: intake.alert?.lastSuccessfulAt || "",
+    createdAt: intake.createdAt || "",
+    updatedAt: intake.updatedAt || ""
+  };
+}
+
+function hubIntakeDetail(intake) {
+  const answers = intake.answers || {};
+  return {
+    ...hubIntakeSummary(intake),
+    smsFrom: intake.phone || "",
+    urgency: answers.urgency || "",
+    details: answers.details || "",
+    staffNotes: Array.isArray(intake.staffNotes) ? intake.staffNotes : [],
+    audit: Array.isArray(intake.audit) ? intake.audit.slice(-20) : []
+  };
+}
+
+function hubSearchText(summary, intake) {
+  const answers = intake.answers || {};
+  return [
+    summary.token,
+    summary.priority,
+    summary.status,
+    summary.name,
+    summary.callbackPhone,
+    summary.location,
+    summary.relationship,
+    summary.summary,
+    answers.urgency,
+    answers.details
+  ].join(" ").toLowerCase();
+}
+
+function compareHubIntakes(left, right) {
+  const priorityRank = { P0: 0, P1: 1, P2: 2 };
+  const statusRank = {
+    needs_staff_callback: 0,
+    open: 1,
+    in_progress: 2,
+    callback_scheduled: 3,
+    closed: 4
+  };
+  return (priorityRank[left.priority] ?? 9) - (priorityRank[right.priority] ?? 9)
+    || (statusRank[left.status] ?? 9) - (statusRank[right.status] ?? 9)
+    || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
 }
 
 export async function escalateUnacknowledgedAlerts(env) {
@@ -781,6 +1085,497 @@ function escapeXml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
 }
+
+function escapeHtml(value) {
+  return escapeXml(value);
+}
+
+const HUB_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PallviAgent Staff Hub</title>
+<style>
+:root {
+  color-scheme: light;
+  --ink: #17202a;
+  --muted: #64707d;
+  --line: #d8dee4;
+  --panel: #ffffff;
+  --canvas: #eef2f5;
+  --header: #1f272e;
+  --accent: #a33126;
+  --accent-dark: #7d241c;
+  --blue: #275d86;
+  --green: #1f6f54;
+  --amber: #9a5b08;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+  margin: 0;
+  min-width: 320px;
+}
+button, input, select, textarea { font: inherit; letter-spacing: 0; }
+button {
+  background: #fff;
+  border: 1px solid #bcc5cd;
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 36px;
+  padding: 0 12px;
+}
+button:hover { border-color: #7f8992; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-dark); }
+button.ghost { background: transparent; }
+input, select, textarea {
+  background: #fff;
+  border: 1px solid #bcc5cd;
+  border-radius: 5px;
+  color: var(--ink);
+  min-height: 36px;
+  padding: 8px 10px;
+  width: 100%;
+}
+textarea { min-height: 78px; resize: vertical; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 3px solid rgba(39, 93, 134, 0.24);
+  outline-offset: 1px;
+}
+.topbar {
+  align-items: center;
+  background: var(--header);
+  color: #fff;
+  display: flex;
+  gap: 14px;
+  min-height: 64px;
+  padding: 12px 22px;
+}
+.mark {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 4px;
+  display: flex;
+  flex: 0 0 36px;
+  font-size: 18px;
+  font-weight: 800;
+  height: 36px;
+  justify-content: center;
+}
+.brand strong { display: block; font-size: 16px; line-height: 1.1; }
+.brand span { color: #bdc6ce; display: block; font-size: 12px; margin-top: 3px; }
+.session { margin-left: auto; }
+.layout {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(360px, 0.92fr) minmax(430px, 1.08fr);
+  margin: 0 auto;
+  max-width: 1320px;
+  padding: 20px 22px 28px;
+}
+.filters {
+  align-items: end;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 140px 128px 82px;
+  padding: 14px 22px;
+}
+.field { display: grid; gap: 5px; }
+.field label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.queue, .detail {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  min-height: 680px;
+  overflow: hidden;
+}
+.queue-head, .detail-head {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  min-height: 56px;
+  padding: 12px 14px;
+}
+.queue-head strong, .detail-head strong { font-size: 15px; }
+.queue-head span, .detail-head span { color: var(--muted); font-size: 12px; margin-left: auto; }
+.case-list { display: grid; }
+.case-row {
+  background: #fff;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  display: grid;
+  gap: 7px;
+  min-height: auto;
+  padding: 12px 14px;
+  text-align: left;
+  width: 100%;
+}
+.case-row:hover, .case-row.active { background: #f7f9fa; }
+.case-main {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto auto 1fr;
+}
+.pill {
+  border-radius: 3px;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  justify-content: center;
+  min-width: 34px;
+  padding: 4px 6px;
+}
+.p0 { background: #f5dfdc; color: var(--accent); }
+.p1 { background: #f7ead5; color: var(--amber); }
+.p2 { background: #e8edf1; color: #58636d; }
+.status { background: #e7f0f6; color: var(--blue); }
+.status.closed { background: #e5eee9; color: var(--green); }
+.case-name { font-size: 14px; font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.case-meta, .case-summary { color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.detail-body { display: grid; gap: 14px; padding: 14px; }
+.summary-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.data-block {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+  min-height: 50px;
+  padding: 0 0 10px;
+}
+.data-block.wide { grid-column: 1 / -1; }
+.data-block label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.data-block div { font-size: 14px; line-height: 1.38; overflow-wrap: anywhere; white-space: pre-wrap; }
+.actions {
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 190px 1fr auto;
+  padding: 12px;
+}
+.notes { display: grid; gap: 8px; }
+.note {
+  background: #f7f9fa;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 10px;
+}
+.note time { color: var(--muted); display: block; font-size: 11px; margin-bottom: 4px; }
+.empty, .error {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 18px 14px;
+}
+.error { color: var(--accent); }
+.login {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: grid;
+  gap: 12px;
+  margin: 12vh auto 0;
+  max-width: 420px;
+  padding: 18px;
+}
+.login h1 { font-size: 20px; margin: 0; }
+.login p { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 0; }
+.hidden { display: none !important; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; padding: 14px; }
+  .filters { grid-template-columns: 1fr 1fr; padding: 12px 14px; }
+  .queue, .detail { min-height: 0; }
+  .actions { grid-template-columns: 1fr; }
+}
+@media (max-width: 540px) {
+  .topbar { padding: 10px 14px; }
+  .filters { grid-template-columns: 1fr; }
+  .summary-grid { grid-template-columns: 1fr; }
+  .session { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="mark">P</div>
+  <div class="brand"><strong>PallviAgent Staff Hub</strong><span>Immigration intake queue</span></div>
+  <button class="ghost session hidden" id="lockButton" type="button">Lock</button>
+</header>
+
+<main id="login" class="login">
+  <h1>Staff access</h1>
+  <p>Enter the hub access code to view intake records.</p>
+  <form id="loginForm" class="field">
+    <label for="accessToken">Access code</label>
+    <input id="accessToken" type="password" autocomplete="current-password" required>
+    <button class="primary" type="submit">Open hub</button>
+  </form>
+  <div id="loginError" class="error hidden"></div>
+</main>
+
+<section id="app" class="hidden">
+  <div class="filters">
+    <div class="field">
+      <label for="search">Search</label>
+      <input id="search" type="search" placeholder="Name, phone, city, facts">
+    </div>
+    <div class="field">
+      <label for="priority">Priority</label>
+      <select id="priority">
+        <option value="">All</option>
+        <option value="P0">P0</option>
+        <option value="P1">P1</option>
+        <option value="P2">P2</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="status">Status</label>
+      <select id="status">
+        <option value="">All</option>
+        <option value="needs_staff_callback">Needs callback</option>
+        <option value="in_progress">In progress</option>
+        <option value="callback_scheduled">Scheduled</option>
+        <option value="closed">Closed</option>
+      </select>
+    </div>
+    <button id="refresh" type="button">Refresh</button>
+  </div>
+  <div class="layout">
+    <section class="queue">
+      <div class="queue-head"><strong>Queue</strong><span id="count">0 cases</span></div>
+      <div id="caseList" class="case-list"></div>
+    </section>
+    <section class="detail">
+      <div class="detail-head"><strong id="detailTitle">Case details</strong><span id="detailTime"></span></div>
+      <div id="detailBody" class="detail-body"><div class="empty">Select a case from the queue.</div></div>
+    </section>
+  </div>
+</section>
+
+<script>
+const state = { token: localStorage.getItem("pallviHubToken") || "", intakes: [], activeToken: "" };
+const login = document.getElementById("login");
+const app = document.getElementById("app");
+const loginForm = document.getElementById("loginForm");
+const loginError = document.getElementById("loginError");
+const lockButton = document.getElementById("lockButton");
+const caseList = document.getElementById("caseList");
+const count = document.getElementById("count");
+const detailTitle = document.getElementById("detailTitle");
+const detailTime = document.getElementById("detailTime");
+const detailBody = document.getElementById("detailBody");
+const search = document.getElementById("search");
+const priority = document.getElementById("priority");
+const statusFilter = document.getElementById("status");
+const refresh = document.getElementById("refresh");
+
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>"']/g, function(character) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character];
+  });
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function statusLabel(value) {
+  return {
+    needs_staff_callback: "Needs callback",
+    in_progress: "In progress",
+    callback_scheduled: "Scheduled",
+    closed: "Closed",
+    open: "Open",
+    awaiting_consent: "Awaiting consent"
+  }[value] || value || "Open";
+}
+
+async function api(path, options) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "Authorization": "Bearer " + state.token,
+      "Content-Type": "application/json",
+      ...(options && options.headers ? options.headers : {})
+    }
+  });
+  if (response.status === 401) throw new Error("Unauthorized");
+  if (response.status === 503) throw new Error("Hub access code is not configured yet.");
+  if (!response.ok) throw new Error("Request failed");
+  return response.json();
+}
+
+async function loadQueue() {
+  const params = new URLSearchParams();
+  if (search.value.trim()) params.set("q", search.value.trim());
+  if (priority.value) params.set("priority", priority.value);
+  if (statusFilter.value) params.set("status", statusFilter.value);
+  const data = await api("/api/intakes?" + params.toString());
+  state.intakes = data.intakes || [];
+  renderQueue();
+  if (state.activeToken) {
+    const exists = state.intakes.some(function(item) { return item.token === state.activeToken; });
+    if (exists) await loadDetail(state.activeToken);
+  }
+}
+
+function renderQueue() {
+  count.textContent = state.intakes.length + (state.intakes.length === 1 ? " case" : " cases");
+  if (!state.intakes.length) {
+    caseList.innerHTML = '<div class="empty">No matching intakes.</div>';
+    return;
+  }
+  caseList.innerHTML = state.intakes.map(function(item) {
+    const active = item.token === state.activeToken ? " active" : "";
+    const priorityClass = String(item.priority || "P2").toLowerCase();
+    return '<button class="case-row' + active + '" type="button" data-token="' + escapeHtml(item.token) + '">' +
+      '<div class="case-main">' +
+      '<span class="pill ' + priorityClass + '">' + escapeHtml(item.priority) + '</span>' +
+      '<span class="pill status ' + (item.status === "closed" ? "closed" : "") + '">' + escapeHtml(statusLabel(item.status)) + '</span>' +
+      '<span class="case-name">' + escapeHtml(item.name || "Name unavailable") + '</span>' +
+      '</div>' +
+      '<div class="case-summary">' + escapeHtml(item.summary || "No summary yet") + '</div>' +
+      '<div class="case-meta">' + escapeHtml(item.location || "Location unavailable") + ' | ' + escapeHtml(item.callbackPhone || "No callback") + ' | ' + escapeHtml(formatDate(item.updatedAt)) + '</div>' +
+      '</button>';
+  }).join("");
+}
+
+async function loadDetail(token) {
+  state.activeToken = token;
+  renderQueue();
+  const item = await api("/api/intakes/" + encodeURIComponent(token));
+  detailTitle.textContent = (item.priority || "P2") + " " + (item.name || "Name unavailable");
+  detailTime.textContent = formatDate(item.updatedAt);
+  detailBody.innerHTML = renderDetail(item);
+  document.getElementById("caseStatus").value = item.status || "needs_staff_callback";
+  document.getElementById("saveCase").addEventListener("click", async function() {
+    await saveDetail(item.token);
+  });
+}
+
+function block(label, value, wide) {
+  return '<div class="data-block ' + (wide ? "wide" : "") + '"><label>' + escapeHtml(label) + '</label><div>' + escapeHtml(value || "Not provided") + '</div></div>';
+}
+
+function renderDetail(item) {
+  const notes = (item.staffNotes || []).length
+    ? item.staffNotes.slice().reverse().map(function(note) {
+        return '<div class="note"><time>' + escapeHtml(formatDate(note.at)) + '</time><div>' + escapeHtml(note.note) + '</div></div>';
+      }).join("")
+    : '<div class="empty">No staff notes yet.</div>';
+  return '<div class="summary-grid">' +
+    block("Callback", item.callbackPhone, false) +
+    block("SMS from", item.smsFrom, false) +
+    block("Location", item.location, false) +
+    block("Language", item.language, false) +
+    block("Relationship", item.relationship, false) +
+    block("Alert status", item.alertStatus || "Not sent", false) +
+    block("Urgency answer", item.urgency, true) +
+    block("Details", item.details, true) +
+    block("AI/staff summary", item.summary, true) +
+    '</div>' +
+    '<div class="actions">' +
+      '<div class="field"><label for="caseStatus">Status</label><select id="caseStatus">' +
+        '<option value="needs_staff_callback">Needs callback</option>' +
+        '<option value="in_progress">In progress</option>' +
+        '<option value="callback_scheduled">Scheduled</option>' +
+        '<option value="closed">Closed</option>' +
+      '</select></div>' +
+      '<div class="field"><label for="caseNote">Note</label><textarea id="caseNote" placeholder="Callback result, assignment, next step"></textarea></div>' +
+      '<button id="saveCase" class="primary" type="button">Save</button>' +
+    '</div>' +
+    '<section class="notes"><strong>Staff notes</strong>' + notes + '</section>';
+}
+
+async function saveDetail(token) {
+  const payload = {
+    status: document.getElementById("caseStatus").value,
+    note: document.getElementById("caseNote").value
+  };
+  await api("/api/intakes/" + encodeURIComponent(token), { method: "PATCH", body: JSON.stringify(payload) });
+  document.getElementById("caseNote").value = "";
+  await loadQueue();
+  await loadDetail(token);
+}
+
+function openApp() {
+  login.classList.add("hidden");
+  app.classList.remove("hidden");
+  lockButton.classList.remove("hidden");
+  loadQueue().catch(function(error) {
+    detailBody.innerHTML = '<div class="error">' + escapeHtml(error.message) + '</div>';
+  });
+}
+
+loginForm.addEventListener("submit", async function(event) {
+  event.preventDefault();
+  loginError.classList.add("hidden");
+  state.token = document.getElementById("accessToken").value.trim();
+  try {
+    await api("/api/intakes?limit=1");
+    localStorage.setItem("pallviHubToken", state.token);
+    openApp();
+  } catch (error) {
+    localStorage.removeItem("pallviHubToken");
+    loginError.textContent = error.message;
+    loginError.classList.remove("hidden");
+  }
+});
+
+lockButton.addEventListener("click", function() {
+  localStorage.removeItem("pallviHubToken");
+  state.token = "";
+  app.classList.add("hidden");
+  lockButton.classList.add("hidden");
+  login.classList.remove("hidden");
+});
+
+caseList.addEventListener("click", function(event) {
+  const row = event.target.closest("[data-token]");
+  if (row) loadDetail(row.dataset.token);
+});
+
+[search, priority, statusFilter].forEach(function(control) {
+  control.addEventListener("change", function() { loadQueue(); });
+});
+search.addEventListener("input", function() {
+  clearTimeout(search._timer);
+  search._timer = setTimeout(loadQueue, 250);
+});
+refresh.addEventListener("click", loadQueue);
+
+if (state.token) openApp();
+</script>
+</body>
+</html>`;
 
 const PRIVACY_POLICY_HTML = `<!doctype html>
 <html lang="en">

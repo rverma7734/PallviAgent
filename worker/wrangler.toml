@@ -17,6 +17,8 @@ AI_SUMMARY_ENABLED = "true"
 AI_MODEL = "@cf/meta/llama-3.2-3b-instruct"
 AI_TRIAGE_TIMEOUT_MS = "2500"
 DATA_RETENTION_DAYS = "30"
+STAFF_ALERT_EMAIL = "alerts@dumbomail.online"
+STAFF_FROM_EMAIL = "intake@dumbomail.online"
 
 [ai]
 binding = "AI"

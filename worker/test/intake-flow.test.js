@@ -295,6 +295,115 @@ test("public SMS opt-in page includes required disclosures", async () => {
   assert.match(body, /terms\.html/);
 });
 
+test("staff hub page is served without exposing intake data", async () => {
+  const response = await handleRequest(new Request("https://example.com/hub"), env());
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(body, /PallviAgent Staff Hub/);
+  assert.match(body, /Staff access/);
+  assert.doesNotMatch(body, /Maria Lopez/);
+});
+
+test("staff hub API requires the configured access token", async () => {
+  const testEnv = env();
+  testEnv.HUB_ACCESS_TOKEN = "test-access-token";
+
+  const missing = await handleRequest(new Request("https://example.com/api/intakes"), testEnv);
+  assert.equal(missing.status, 401);
+
+  const valid = await handleRequest(new Request("https://example.com/api/intakes", {
+    headers: { Authorization: "Bearer test-access-token" }
+  }), testEnv);
+  assert.equal(valid.status, 200);
+  const payload = await valid.json();
+  assert.deepEqual(payload.intakes, []);
+  assert.match(payload.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("staff hub lists and updates completed intakes", async () => {
+  const testEnv = env({
+    staffNotifier: async () => ({ ok: true })
+  });
+  testEnv.HUB_ACCESS_TOKEN = "test-access-token";
+  const phone = "+15555550144";
+  const messages = [
+    "START", "YES", "1", "Maria Lopez", "+15555550144", "FAMILY", "Newark NJ",
+    "2 detained now", "ICE detained my husband tonight after a traffic stop."
+  ];
+  for (const message of messages) await processIncomingSms(testEnv, phone, message);
+
+  const list = await handleRequest(new Request("https://example.com/api/intakes", {
+    headers: { Authorization: "Bearer test-access-token" }
+  }), testEnv);
+  assert.equal(list.status, 200);
+  const listed = await list.json();
+  assert.equal(listed.intakes.length, 1);
+  assert.equal(listed.intakes[0].name, "Maria Lopez");
+  assert.equal(listed.intakes[0].priority, "P0");
+  assert.equal(listed.intakes[0].callbackPhone, "+15555550144");
+
+  const token = listed.intakes[0].token;
+  const update = await handleRequest(new Request(`https://example.com/api/intakes/${token}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: "Bearer test-access-token",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ status: "in_progress", note: "Assigned to overnight staff." })
+  }), testEnv);
+  assert.equal(update.status, 200);
+  const detail = await update.json();
+  assert.equal(detail.status, "in_progress");
+  assert.equal(detail.staffNotes[0].note, "Assigned to overnight staff.");
+  assert.ok(detail.audit.some(({ type }) => type === "hub_status_updated"));
+});
+
+test("completed intakes send full staff email in parallel with SMS alert", async () => {
+  const alerts = [];
+  const emails = [];
+  const testEnv = env({
+    twilioMessageSender: async (message) => {
+      alerts.push(message);
+      return { ok: true };
+    }
+  });
+  testEnv.TWILIO_ACCOUNT_SID = "ACtest";
+  testEnv.TWILIO_AUTH_TOKEN = "test-token";
+  testEnv.TWILIO_PHONE_NUMBER = "+15168714383";
+  testEnv.STAFF_ALERT_PHONE = "+15555550999";
+  testEnv.RESEND_API_KEY = "test-resend-key";
+  testEnv.STAFF_ALERT_EMAIL = "alerts@example.com";
+  testEnv.STAFF_FROM_EMAIL = "intake@example.com";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    emails.push({ url, body: JSON.parse(options.body) });
+    return Response.json({ id: "email-test-id" });
+  };
+  try {
+    const phone = "+15555550145";
+    const messages = [
+      "START", "YES", "1", "Jordan Lee", "+15555550145", "SELF", "Boston MA",
+      "4 general immigration help", "Needs help understanding a court notice."
+    ];
+    for (const message of messages) await processIncomingSms(testEnv, phone, message);
+
+    assert.equal(alerts.length, 1);
+    assert.equal(emails.length, 1);
+    assert.equal(emails[0].url, "https://api.resend.com/emails");
+    assert.equal(emails[0].body.to[0], "alerts@example.com");
+    assert.match(emails[0].body.subject, /\[P2 ROUTINE\] Jordan Lee - Boston MA/);
+    assert.match(emails[0].body.text, /Name: Jordan Lee/);
+    assert.match(emails[0].body.text, /Callback: \+15555550145/);
+    assert.match(emails[0].body.text, /Details:\nNeeds help understanding a court notice/);
+    const saved = JSON.parse(await testEnv.INTAKE_KV.get(`conversation:${phone}`));
+    assert.equal(saved.emailAlert.status, "sent");
+    assert.equal(saved.emailAlert.lastMessageId, "email-test-id");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("privacy policy discloses limited automated triage", async () => {
   const response = await handleRequest(new Request("https://example.com/privacy-policy.html"), env());
   const body = await response.text();
