@@ -1149,6 +1149,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   outline: 3px solid rgba(39, 93, 134, 0.24);
   outline-offset: 1px;
 }
+a { color: var(--blue); }
 .topbar {
   align-items: center;
   background: var(--header);
@@ -1216,7 +1217,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .case-list { display: grid; }
 .case-row {
   background: #fff;
-  border: 0;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
   display: grid;
@@ -1227,6 +1227,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   width: 100%;
 }
 .case-row:hover, .case-row.active { background: #f7f9fa; }
+.case-select {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  display: grid;
+  gap: 7px;
+  min-height: 0;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
 .case-main {
   align-items: center;
   display: grid;
@@ -1249,6 +1260,35 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .status.closed { background: #e5eee9; color: var(--green); }
 .case-name { font-size: 14px; font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .case-meta, .case-summary { color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.case-footer {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.call-link {
+  align-items: center;
+  background: #e7f0f6;
+  border: 1px solid #c7dae8;
+  border-radius: 5px;
+  color: var(--blue);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  min-height: 32px;
+  padding: 6px 9px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.phone-link {
+  align-items: center;
+  color: var(--blue);
+  display: inline-flex;
+  font-weight: 800;
+  min-height: 30px;
+  text-decoration: none;
+}
+.phone-link:hover, .call-link:hover { text-decoration: underline; }
 .detail-body { display: grid; gap: 14px; padding: 14px; }
 .summary-grid {
   display: grid;
@@ -1313,8 +1353,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .actions { grid-template-columns: 1fr; }
 }
 @media (max-width: 540px) {
-  .topbar { padding: 10px 14px; }
+  .topbar {
+    min-height: 58px;
+    padding: 10px 14px;
+    position: sticky;
+    top: 0;
+    z-index: 4;
+  }
+  .brand strong { font-size: 15px; }
+  .brand span { font-size: 11px; }
+  .layout { gap: 12px; padding: 10px; }
   .filters { grid-template-columns: 1fr; }
+  .case-row { padding: 13px 12px; }
+  .case-main { grid-template-columns: auto 1fr; }
+  .case-main .status { grid-column: 1 / -1; justify-self: start; }
+  .case-name { white-space: normal; }
+  .case-footer { align-items: stretch; flex-direction: column; }
+  .call-link { justify-content: center; width: 100%; }
+  .detail-head { align-items: flex-start; flex-direction: column; }
+  .detail-head span { margin-left: 0; }
+  .detail-body { padding: 12px; }
   .summary-grid { grid-template-columns: 1fr; }
   .session { display: none; }
 }
@@ -1418,6 +1476,22 @@ function statusLabel(value) {
   }[value] || value || "Open";
 }
 
+function phoneHref(value) {
+  const cleaned = String(value || "").replace(/[^\\d+]/g, "");
+  if (!cleaned) return "";
+  if (cleaned.startsWith("+")) return "tel:" + cleaned;
+  if (cleaned.length === 10) return "tel:+1" + cleaned;
+  if (cleaned.length === 11 && cleaned.startsWith("1")) return "tel:+" + cleaned;
+  return "tel:" + cleaned;
+}
+
+function phoneLink(value, label) {
+  const href = phoneHref(value);
+  const text = value || "Not provided";
+  if (!href) return escapeHtml(text);
+  return '<a class="phone-link" href="' + escapeHtml(href) + '">' + escapeHtml(label || text) + '</a>';
+}
+
 async function api(path, options) {
   const response = await fetch(path, {
     ...options,
@@ -1456,15 +1530,22 @@ function renderQueue() {
   caseList.innerHTML = state.intakes.map(function(item) {
     const active = item.token === state.activeToken ? " active" : "";
     const priorityClass = String(item.priority || "P2").toLowerCase();
-    return '<button class="case-row' + active + '" type="button" data-token="' + escapeHtml(item.token) + '">' +
-      '<div class="case-main">' +
-      '<span class="pill ' + priorityClass + '">' + escapeHtml(item.priority) + '</span>' +
-      '<span class="pill status ' + (item.status === "closed" ? "closed" : "") + '">' + escapeHtml(statusLabel(item.status)) + '</span>' +
-      '<span class="case-name">' + escapeHtml(item.name || "Name unavailable") + '</span>' +
+    const callHref = phoneHref(item.callbackPhone);
+    const callAction = callHref ? '<a class="call-link" href="' + escapeHtml(callHref) + '">Call</a>' : "";
+    return '<article class="case-row' + active + '">' +
+      '<button class="case-select" type="button" data-token="' + escapeHtml(item.token) + '">' +
+        '<div class="case-main">' +
+        '<span class="pill ' + priorityClass + '">' + escapeHtml(item.priority) + '</span>' +
+        '<span class="pill status ' + (item.status === "closed" ? "closed" : "") + '">' + escapeHtml(statusLabel(item.status)) + '</span>' +
+        '<span class="case-name">' + escapeHtml(item.name || "Name unavailable") + '</span>' +
+        '</div>' +
+        '<div class="case-summary">' + escapeHtml(item.summary || "No summary yet") + '</div>' +
+      '</button>' +
+      '<div class="case-footer">' +
+        '<div class="case-meta">' + escapeHtml(item.location || "Location unavailable") + ' | ' + escapeHtml(formatDate(item.updatedAt)) + '</div>' +
+        callAction +
       '</div>' +
-      '<div class="case-summary">' + escapeHtml(item.summary || "No summary yet") + '</div>' +
-      '<div class="case-meta">' + escapeHtml(item.location || "Location unavailable") + ' | ' + escapeHtml(item.callbackPhone || "No callback") + ' | ' + escapeHtml(formatDate(item.updatedAt)) + '</div>' +
-      '</button>';
+      '</article>';
   }).join("");
 }
 
@@ -1481,8 +1562,9 @@ async function loadDetail(token) {
   });
 }
 
-function block(label, value, wide) {
-  return '<div class="data-block ' + (wide ? "wide" : "") + '"><label>' + escapeHtml(label) + '</label><div>' + escapeHtml(value || "Not provided") + '</div></div>';
+function block(label, value, wide, options) {
+  const content = options && options.phone ? phoneLink(value) : escapeHtml(value || "Not provided");
+  return '<div class="data-block ' + (wide ? "wide" : "") + '"><label>' + escapeHtml(label) + '</label><div>' + content + '</div></div>';
 }
 
 function renderDetail(item) {
@@ -1492,8 +1574,8 @@ function renderDetail(item) {
       }).join("")
     : '<div class="empty">No staff notes yet.</div>';
   return '<div class="summary-grid">' +
-    block("Callback", item.callbackPhone, false) +
-    block("SMS from", item.smsFrom, false) +
+    block("Callback", item.callbackPhone, false, { phone: true }) +
+    block("SMS from", item.smsFrom, false, { phone: true }) +
     block("Location", item.location, false) +
     block("Language", item.language, false) +
     block("Relationship", item.relationship, false) +

@@ -302,6 +302,7 @@ test("staff hub page is served without exposing intake data", async () => {
   assert.equal(response.status, 200);
   assert.match(body, /PallviAgent Staff Hub/);
   assert.match(body, /Staff access/);
+  assert.match(body, /replace\(\/\[\^\\d\+\]\/g/);
   assert.doesNotMatch(body, /Maria Lopez/);
 });
 
