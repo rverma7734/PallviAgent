@@ -758,11 +758,29 @@ async function updateHubIntake(request, env, token) {
     }
   }
 
+  const assignedTo = cleanAnswer(payload.assignedTo, 80);
+  if (assignedTo !== cleanAnswer(intake.assignedTo, 80)) {
+    intake.assignedTo = assignedTo;
+    addAuditEvent(intake, "hub_assignment_updated", { assignedTo: assignedTo || "Unassigned" });
+  }
+
   const note = cleanAnswer(payload.note, 600);
-  if (note) {
+  const outcome = cleanAnswer(payload.outcome, 80);
+  if (outcome) {
+    intake.lastOutcome = outcome;
+    intake.lastActionAt = nowIso();
     intake.staffNotes = Array.isArray(intake.staffNotes) ? intake.staffNotes : [];
-    intake.staffNotes.push({ at: nowIso(), note });
+    intake.staffNotes.push({ at: intake.lastActionAt, type: "outcome", outcome, note });
     intake.staffNotes = intake.staffNotes.slice(-25);
+    addAuditEvent(intake, "hub_outcome_recorded", { outcome });
+  } else if (note) {
+    intake.lastActionAt = nowIso();
+    intake.staffNotes = Array.isArray(intake.staffNotes) ? intake.staffNotes : [];
+    intake.staffNotes.push({ at: intake.lastActionAt, type: "note", note });
+    intake.staffNotes = intake.staffNotes.slice(-25);
+  }
+
+  if (note) {
     addAuditEvent(intake, "hub_note_added");
   }
 
@@ -784,6 +802,9 @@ function hubIntakeSummary(intake) {
     relationship: answers.personAtRisk || "",
     summary: intake.alert?.summary || compactStaffSummary(answers.details || answers.urgency || "", 90),
     alertStatus: intake.alert?.status || "",
+    assignedTo: intake.assignedTo || "",
+    lastOutcome: intake.lastOutcome || "",
+    lastActionAt: intake.lastActionAt || "",
     lastAlertAt: intake.alert?.lastSuccessfulAt || "",
     createdAt: intake.createdAt || "",
     updatedAt: intake.updatedAt || ""
@@ -812,6 +833,8 @@ function hubSearchText(summary, intake) {
     summary.callbackPhone,
     summary.location,
     summary.relationship,
+    summary.assignedTo,
+    summary.lastOutcome,
     summary.summary,
     answers.urgency,
     answers.details
@@ -1260,6 +1283,23 @@ a { color: var(--blue); }
 .status.closed { background: #e5eee9; color: var(--green); }
 .case-name { font-size: 14px; font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .case-meta, .case-summary { color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.case-signals {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.signal {
+  background: #eef2f5;
+  border-radius: 3px;
+  color: #58636d;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 6px;
+}
+.signal.hot { background: #f5dfdc; color: var(--accent); }
+.signal.ok { background: #e5eee9; color: var(--green); }
 .case-footer {
   align-items: center;
   display: flex;
@@ -1316,8 +1356,23 @@ a { color: var(--blue); }
   border-radius: 7px;
   display: grid;
   gap: 10px;
-  grid-template-columns: 190px 1fr auto;
+  grid-template-columns: minmax(160px, 0.7fr) minmax(180px, 0.8fr) minmax(240px, 1fr) auto;
   padding: 12px;
+}
+.outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.outcome-button {
+  font-size: 12px;
+  min-height: 32px;
+  padding: 0 9px;
+}
+.outcome-button.selected {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
 }
 .notes { display: grid; gap: 8px; }
 .note {
@@ -1368,6 +1423,8 @@ a { color: var(--blue); }
   .case-main { grid-template-columns: auto 1fr; }
   .case-main .status { grid-column: 1 / -1; justify-self: start; }
   .case-name { white-space: normal; }
+  .case-signals { align-items: stretch; flex-direction: column; }
+  .signal { justify-content: center; }
   .case-footer { align-items: stretch; flex-direction: column; }
   .call-link { justify-content: center; width: 100%; }
   .detail-head { align-items: flex-start; flex-direction: column; }
@@ -1465,6 +1522,28 @@ function formatDate(value) {
   return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+function relativeAge(value) {
+  if (!value) return "";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + "m ago";
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return hours + "h ago";
+  return Math.floor(hours / 24) + "d ago";
+}
+
+function ageSignal(item) {
+  const basis = item.lastActionAt || item.updatedAt || item.createdAt;
+  const age = relativeAge(basis);
+  if (!age) return "";
+  const label = item.lastActionAt ? "Action " + age : "New " + age;
+  const hot = !item.lastActionAt && ["P0", "P1"].includes(item.priority);
+  return '<span class="signal ' + (hot ? "hot" : "") + '">' + escapeHtml(label) + '</span>';
+}
+
 function statusLabel(value) {
   return {
     needs_staff_callback: "Needs callback",
@@ -1474,6 +1553,17 @@ function statusLabel(value) {
     open: "Open",
     awaiting_consent: "Awaiting consent"
   }[value] || value || "Open";
+}
+
+function outcomeLabel(value) {
+  return {
+    called_no_answer: "Called - no answer",
+    left_voicemail: "Left voicemail",
+    reached_client: "Reached client",
+    needs_attorney_review: "Needs attorney review",
+    wrong_number: "Wrong number",
+    closed_after_callback: "Closed after callback"
+  }[value] || value || "";
 }
 
 function phoneHref(value) {
@@ -1532,6 +1622,8 @@ function renderQueue() {
     const priorityClass = String(item.priority || "P2").toLowerCase();
     const callHref = phoneHref(item.callbackPhone);
     const callAction = callHref ? '<a class="call-link" href="' + escapeHtml(callHref) + '">Call</a>' : "";
+    const assignment = item.assignedTo ? '<span class="signal ok">Assigned: ' + escapeHtml(item.assignedTo) + '</span>' : '<span class="signal">Unassigned</span>';
+    const outcome = item.lastOutcome ? '<span class="signal">' + escapeHtml(outcomeLabel(item.lastOutcome)) + '</span>' : "";
     return '<article class="case-row' + active + '">' +
       '<button class="case-select" type="button" data-token="' + escapeHtml(item.token) + '">' +
         '<div class="case-main">' +
@@ -1540,6 +1632,7 @@ function renderQueue() {
         '<span class="case-name">' + escapeHtml(item.name || "Name unavailable") + '</span>' +
         '</div>' +
         '<div class="case-summary">' + escapeHtml(item.summary || "No summary yet") + '</div>' +
+        '<div class="case-signals">' + assignment + ageSignal(item) + outcome + '</div>' +
       '</button>' +
       '<div class="case-footer">' +
         '<div class="case-meta">' + escapeHtml(item.location || "Location unavailable") + ' | ' + escapeHtml(formatDate(item.updatedAt)) + '</div>' +
@@ -1560,6 +1653,17 @@ async function loadDetail(token) {
   document.getElementById("saveCase").addEventListener("click", async function() {
     await saveDetail(item.token);
   });
+  document.querySelectorAll(".outcome-button").forEach(function(button) {
+    button.addEventListener("click", function() {
+      document.querySelectorAll(".outcome-button").forEach(function(item) { item.classList.remove("selected"); });
+      button.classList.add("selected");
+      if (button.dataset.outcome === "closed_after_callback") {
+        document.getElementById("caseStatus").value = "closed";
+      } else if (document.getElementById("caseStatus").value === "needs_staff_callback") {
+        document.getElementById("caseStatus").value = "in_progress";
+      }
+    });
+  });
 }
 
 function block(label, value, wide, options) {
@@ -1570,9 +1674,22 @@ function block(label, value, wide, options) {
 function renderDetail(item) {
   const notes = (item.staffNotes || []).length
     ? item.staffNotes.slice().reverse().map(function(note) {
-        return '<div class="note"><time>' + escapeHtml(formatDate(note.at)) + '</time><div>' + escapeHtml(note.note) + '</div></div>';
+        const heading = note.type === "outcome" ? outcomeLabel(note.outcome) : "Note";
+        const detail = note.note ? note.note : "";
+        return '<div class="note"><time>' + escapeHtml(formatDate(note.at)) + ' - ' + escapeHtml(heading) + '</time><div>' + escapeHtml(detail || heading) + '</div></div>';
       }).join("")
     : '<div class="empty">No staff notes yet.</div>';
+  const outcomes = [
+    ["called_no_answer", "No answer"],
+    ["left_voicemail", "Voicemail"],
+    ["reached_client", "Reached"],
+    ["needs_attorney_review", "Attorney review"],
+    ["wrong_number", "Wrong number"],
+    ["closed_after_callback", "Close"]
+  ].map(function(entry) {
+    const selected = item.lastOutcome === entry[0] ? " selected" : "";
+    return '<button class="outcome-button' + selected + '" type="button" data-outcome="' + entry[0] + '">' + escapeHtml(entry[1]) + '</button>';
+  }).join("");
   return '<div class="summary-grid">' +
     block("Callback", item.callbackPhone, false, { phone: true }) +
     block("SMS from", item.smsFrom, false, { phone: true }) +
@@ -1580,6 +1697,8 @@ function renderDetail(item) {
     block("Language", item.language, false) +
     block("Relationship", item.relationship, false) +
     block("Alert status", item.alertStatus || "Not sent", false) +
+    block("Assigned to", item.assignedTo || "Unassigned", false) +
+    block("Last action", item.lastActionAt ? relativeAge(item.lastActionAt) : "No action yet", false) +
     block("Urgency answer", item.urgency, true) +
     block("Details", item.details, true) +
     block("AI/staff summary", item.summary, true) +
@@ -1591,15 +1710,19 @@ function renderDetail(item) {
         '<option value="callback_scheduled">Scheduled</option>' +
         '<option value="closed">Closed</option>' +
       '</select></div>' +
+      '<div class="field"><label for="assignedTo">Assigned to</label><input id="assignedTo" type="text" placeholder="Unassigned" value="' + escapeHtml(item.assignedTo || "") + '"></div>' +
       '<div class="field"><label for="caseNote">Note</label><textarea id="caseNote" placeholder="Callback result, assignment, next step"></textarea></div>' +
       '<button id="saveCase" class="primary" type="button">Save</button>' +
     '</div>' +
+    '<div class="field"><label>Quick outcome</label><div class="outcomes">' + outcomes + '</div></div>' +
     '<section class="notes"><strong>Staff notes</strong>' + notes + '</section>';
 }
 
 async function saveDetail(token) {
   const payload = {
     status: document.getElementById("caseStatus").value,
+    assignedTo: document.getElementById("assignedTo").value,
+    outcome: document.querySelector(".outcome-button.selected")?.dataset.outcome || "",
     note: document.getElementById("caseNote").value
   };
   await api("/api/intakes/" + encodeURIComponent(token), { method: "PATCH", body: JSON.stringify(payload) });

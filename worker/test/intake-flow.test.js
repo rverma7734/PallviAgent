@@ -351,13 +351,24 @@ test("staff hub lists and updates completed intakes", async () => {
       Authorization: "Bearer test-access-token",
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ status: "in_progress", note: "Assigned to overnight staff." })
+    body: JSON.stringify({
+      status: "in_progress",
+      assignedTo: "Overnight staff",
+      outcome: "left_voicemail",
+      note: "Left voicemail and will retry."
+    })
   }), testEnv);
   assert.equal(update.status, 200);
   const detail = await update.json();
   assert.equal(detail.status, "in_progress");
-  assert.equal(detail.staffNotes[0].note, "Assigned to overnight staff.");
+  assert.equal(detail.assignedTo, "Overnight staff");
+  assert.equal(detail.lastOutcome, "left_voicemail");
+  assert.match(detail.lastActionAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(detail.staffNotes[0].outcome, "left_voicemail");
+  assert.equal(detail.staffNotes[0].note, "Left voicemail and will retry.");
   assert.ok(detail.audit.some(({ type }) => type === "hub_status_updated"));
+  assert.ok(detail.audit.some(({ type }) => type === "hub_assignment_updated"));
+  assert.ok(detail.audit.some(({ type }) => type === "hub_outcome_recorded"));
 });
 
 test("completed intakes send full staff email in parallel with SMS alert", async () => {
